@@ -29,6 +29,14 @@ void error(char *fmt, ...)
     exit(1);
 }
 
+char *strndup(char *p, int len)
+{
+    char *buf = malloc(len + 1); // \0の分+1
+    strncpy(buf, p, len);
+    buf[len] = '\0';
+    return buf;
+}
+
 bool consume(char *op)
 {
     //二文字以上の演算子を取れるように改良
@@ -36,6 +44,15 @@ bool consume(char *op)
         return false;
     token = token->next;
     return true;
+}
+
+Token *consume_ident()
+{
+    if (token->kind != TK_IDENT)
+        return NULL;
+    Token *t = token;
+    token = token->next; //次のTokenへ進む
+    return t;            //TK_IDENTを返す
 }
 
 void expect(char *op)
@@ -87,6 +104,31 @@ bool is_alnum(char c)
     return is_alpha(c) || ('0' <= c && c <= '9');
 }
 
+char *starts_with_reserved(char *p)
+{
+    //Keyword
+    static char *kw[] = {"return", "if", "else", "while", "for"};
+
+    //sizeof(kw)/sizeof(*kw)は配列のlen
+    for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+    {
+        int len = strlen(kw[i]);
+        if (startswith(p, kw[i]) && !is_alnum(p[len]))
+            return kw[i];
+    }
+
+    //MultiLetter pinctuator
+    static char *ops[] = {"==", "!=", "<=", ">="};
+
+    for (int i = 0; i < sizeof(ops) / sizeof(*ops); i++)
+    {
+        if (startswith(p, ops[i]))
+            return ops[i];
+    }
+
+    return NULL;
+}
+
 Token *tokenize()
 {
 
@@ -112,19 +154,32 @@ Token *tokenize()
             continue;
         }
 
-        //複数文字に対応させる
-
-        if (startswith(p, "==") || startswith(p, "!=") || startswith(p, "<=") || startswith(p, ">="))
+        //Keyword,複数文字に対応させる
+        char *kw = starts_with_reserved(p);
+        if (kw)
         {
-            cur = new_token(TK_RESERVED, cur, p, 2);
-            p += 2; //二つ分進めてあげる
+            int len = strlen(kw);
+            cur = new_token(TK_RESERVED, cur, p, len);
+            p += len;
             continue;
         }
 
         // Single-letter punctuator
-        if (strchr("+-*/()<>;", *p))
+        if (strchr("+-*/()<>;={}", *p))
         {
             cur = new_token(TK_RESERVED, cur, p++, 1);
+            continue;
+        }
+
+        //Identifier
+        if (is_alpha(*p))
+        {
+            char *q = p++; //Identifierの最初のアドレスを保存
+            while (is_alnum(*p))
+            {
+                p++;
+            }
+            cur = new_token(TK_IDENT, cur, q, p - q);
             continue;
         }
 

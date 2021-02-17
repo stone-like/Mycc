@@ -18,9 +18,19 @@ int main(int argc, char **argv)
 
     token = tokenize(); //TokList作成
 
-    Node *node = program();
+    Program *prog = program();
 
-    codegen(node);
+    //localsがprogで作られているのでoffsetを計算、実際にスタックにロードするのに備える
+    int offset = 0;
+    for (Var *var = prog->locals; var; var = var->next)
+    {
+        offset += 8;
+        var->offset = offset;
+    }
+
+    prog->stack_size = offset;
+
+    codegen(prog);
 
     return 0;
 }
