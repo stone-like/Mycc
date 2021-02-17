@@ -1,6 +1,7 @@
 #include "Mycc.h"
 
-int labelseq = 0; //複数if文とカあるときにlabelがかぶらないように
+int labelseq = 0;                                          //複数if文とカあるときにlabelがかぶらないように
+char *argreg[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"}; //関数の引数リスト、現在6引数まで
 
 void gen_addr(Node *node)
 {
@@ -123,6 +124,37 @@ void gen(Node *node)
             gen(n);
         }
         return;
+    case ND_FUNCALL:
+    {
+        int nargs = 0;
+        for (Node *arg = node->args; arg; arg = arg->next)
+        {
+            gen(arg); //argをスタックに積んでいく
+            nargs++;
+        }
+
+        for (int i = nargs - 1; i >= 0; i--)
+        {
+            printf("   pop %s\n", argreg[i]); //argregに値を入れていく
+        }
+
+        //RSPを16byteAlignする、可変長引数のためにraxを0にセットしておく
+        int seq = labelseq++;
+        printf("  mov rax, rsp\n");
+        printf("  and rax, 15\n");
+        printf("  jnz .Lcall%d\n", seq);
+        printf("  mov rax, 0\n");
+        printf("  call %s\n", node->funcname);
+        printf("  jmp .Lend%d\n", seq);
+        printf(".Lcall%d:\n", seq);
+        printf("  sub rsp, 8\n"); //ここまでのスタック操作は8Byte単位だったので、16byte単位でないということは8byte単位になっているので8byte引いてあげればいい
+        printf("  mov rax, 0\n");
+        printf("   call %s\n", node->funcname); //%sはchar *を最後まで表示？
+        printf("  add rsp, 8\n");               //一応戻しておく、また関数呼び出しでずれていたらその都度8byte引くことになる
+        printf(".Lend%d:\n", seq);
+        printf("   push rax\n"); //返り値がraxに入っているので
+        return;
+    }
 
     case ND_RETURN:
         gen(node->lhs);
