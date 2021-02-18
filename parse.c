@@ -1,10 +1,21 @@
 #include "Mycc.h"
 
 VarList *locals;
+VarList *globals;
 
 Var *find_var(Token *tok)
 {
+    //For Locals
     for (VarList *vl = locals; vl; vl = vl->next)
+    {
+        Var *var = vl->var;
+        //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
+        if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
+            return var;
+    }
+
+    //For Globals
+    for (VarList *vl = globals; vl; vl = vl->next)
     {
         Var *var = vl->var;
         //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
@@ -56,21 +67,34 @@ Node *new_var(Var *var, Token *tok)
 
 //NodeごとにTypeを入れるときに、Varの場合はnode->ty = node->var->tyとなる
 //localsに追加
-Var *push_var(char *name, Type *ty)
+Var *push_var(char *name, Type *ty, bool is_local)
 {
     //新しい奴から先頭に来る
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
+    var->is_local = is_local;
 
     VarList *vl = calloc(1, sizeof(VarList));
     vl->var = var;
-    vl->next = locals;
-    locals = vl;
+
+    if (is_local)
+    {
+        vl->next = locals;
+        locals = vl;
+    }
+    else
+    {
+        vl->next = globals;
+        globals = vl;
+    }
+
     return var;
 }
 
 Function *function();
+Type *basetype();
+void global_var();
 Node *declaration();
 Node *stmt();
 Node *expr();
@@ -80,24 +104,48 @@ Node *relational();
 Node *add();
 Node *mul();
 Node *unary();
+Node *postfix();
 Node *primary();
 
-// program = function*
+//functionとgloval変数は似ているため見分ける関数が必要
+//int x[10];とint x(...)
+bool is_function()
+{
+    Token *tok = token;
+    basetype();
 
-Function *program()
+    bool is_func = consume_ident() && consume("(");
+    token = tok; //読んだ分戻してあげる
+    return is_func;
+}
+
+// program = (gloval-var | function)*
+
+Program *program()
 {
 
     Function head;
     head.next = NULL;
     Function *cur = &head;
+    globals = NULL; //globalsはfunctionレベルで初期化しないでよい
 
     while (!at_eof())
     {
-        cur->next = function();
-        cur = cur->next;
+        if (is_function())
+        {
+            cur->next = function();
+            cur = cur->next;
+        }
+        else
+        {
+            global_var();
+        }
     }
 
-    return head.next;
+    Program *prog = calloc(1, sizeof(Program));
+    prog->globals = globals;
+    prog->fns = head.next;
+    return prog;
 }
 
 // basetype = "int" "*"* //*が0個以上
@@ -115,15 +163,27 @@ Type *basetype()
     return ty;
 }
 
+Type *read_type_suffix(Type *base)
+{
+    if (!consume("["))
+        return base;          //そのまま返すだけ
+    int sz = expect_number(); // "["の次は1とかが来る
+    expect("]");
+    base = read_type_suffix(base);
+    return array_of(base, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
+}
+
 VarList *read_func_param()
 {
-    //一つ目の引数だけここで取得
-    VarList *vl = calloc(1, sizeof(VarList));
     //fn(int x,int y)みたいになっているので"("の次はbasetypeが来ている
 
     Type *ty = basetype();
     //typeの次はIdentifier
-    vl->var = push_var(expect_ident(), ty); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
+    char *name = expect_ident();
+    ty = read_type_suffix(ty);
+
+    VarList *vl = calloc(1, sizeof(VarList));
+    vl->var = push_var(name, ty, true); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
     return vl;
 }
 VarList *read_func_params()
@@ -175,12 +235,25 @@ Function *function()
     return fn;
 }
 
-// declaration = basetype ident ("=" expr) ";"
+//global-var = basetype ident ( "[" num "]" )* ";"
+void global_var()
+{
+    Type *ty = basetype();
+    char *name = expect_ident();
+    ty = read_type_suffix(ty);
+    expect(";");
+    push_var(name, ty, false);
+}
+
+// declaration = basetype ident  ("[" num "]")*  ("=" expr) ";"
 Node *declaration()
 {
     Token *tok = token;
     Type *ty = basetype();
-    Var *var = push_var(expect_ident(), ty);
+
+    char *name = expect_ident();
+    ty = read_type_suffix(ty); //suffixの分tyを変更、あるいはそのまま
+    Var *var = push_var(name, ty, true);
 
     if (consume(";"))
     {
@@ -387,7 +460,7 @@ Node *mul()
     }
 }
 
-//unary = ("+" | "-" | "*" | "&")? unary | primary
+//unary = ("+" | "-" | "*" | "&")? unary | postfix
 Node *unary()
 {
     Token *tok;
@@ -409,7 +482,24 @@ Node *unary()
         return new_unary(ND_DEREF, unary(), tok);
     }
 
-    return primary();
+    return postfix();
+}
+
+// postfix = primary ( "[" expr "]" )*
+Node *postfix()
+{
+    Node *node = primary();
+    Token *tok;
+
+    while (tok = consume("["))
+    {
+        //x[y] is short for *(x+y)
+        Node *exp = new_binary(ND_ADD, node, expr(), tok);
+        expect("]");
+        node = new_unary(ND_DEREF, exp, tok);
+    }
+
+    return node;
 }
 
 //func-args = "(" (assign ("," assign)* )? ")"
@@ -430,9 +520,11 @@ Node *func_args()
     return head;
 }
 
-//primary = "(" expr ")" | ident func-args?| num
+//primary = "(" expr ")" | "sizeof" unary | ident func-args?| num
 Node *primary()
 {
+    Token *tok;
+
     if (consume("("))
     {
         //次のトークンが"("なら、"("　expr　")"となっているはず
@@ -441,7 +533,8 @@ Node *primary()
         return node;
     }
 
-    Token *tok;
+    if (tok = consume("sizeof"))
+        return new_unary(ND_SIZEOF, unary(), tok);
     if (tok = consume_ident())
     {
         //identのあとに"("が来ていれば関数呼び出し

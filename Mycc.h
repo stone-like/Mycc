@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -51,12 +52,15 @@ extern Token *token;
 // parse.c
 //
 
-//Local Variable
+//Variable
 typedef struct Var Var;
 struct Var
 {
     char *name;
     Type *ty;
+    bool is_local; //local or global
+
+    //Used For Local Variable
     int offset; //Offset from RBP
 };
 
@@ -85,6 +89,7 @@ typedef enum
     ND_IF,        // "if"
     ND_WHILE,     // "while"
     ND_FOR,       // "for"
+    ND_SIZEOF,    // "sizeof"
     ND_BLOCK,     // {...}
     ND_FUNCALL,   //Function Call
     ND_EXPR_STMT, // Expression statement
@@ -139,29 +144,39 @@ struct Function
     int stack_size;
 };
 
-Function *program();
+typedef struct
+{
+    VarList *globals;
+    Function *fns;
+} Program;
+
+Program *program();
 
 // type.c
 
 typedef enum
 {
     TY_INT,
-    TY_PTR
+    TY_PTR,
+    TY_ARRAY
 } TypeKind;
 
 struct Type
 {
     TypeKind kind;
     Type *base;
+    int array_size;
 };
 
 Type *int_type();
 Type *pointer_to(Type *base);
+Type *array_of(Type *base, int size);
+int size_of(Type *ty);
 
-void add_type(Function *prog);
+void add_type(Program *prog);
 
 //
 // codegen.c
 //
 
-void codegen(Function *prog);
+void codegen(Program *prog);

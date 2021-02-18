@@ -144,7 +144,7 @@ bool is_alnum(char c)
 char *starts_with_reserved(char *p)
 {
     //Keyword
-    static char *kw[] = {"return", "if", "else", "while", "for", "int"};
+    static char *kw[] = {"return", "if", "else", "while", "for", "int", "sizeof"};
 
     //sizeof(kw)/sizeof(*kw)は配列のlen
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -202,7 +202,7 @@ Token *tokenize()
         }
 
         // Single-letter punctuator
-        if (strchr("+-*/()<>;={},&", *p))
+        if (strchr("+-*/()<>;={},&[]", *p))
         {
             cur = new_token(TK_RESERVED, cur, p++, 1);
             continue;

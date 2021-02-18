@@ -9,18 +9,44 @@ void gen(Node *node);
 
 void gen_addr(Node *node)
 {
+    // *y = &xみたいなときはassignから*yは直ぐここにくる
     switch (node->kind)
     {
     case ND_VAR:
-        printf("   lea rax, [rbp-%d]\n", node->var->offset); //leaはrbp-%dがアドレスなので[rbp-%d]として、アドレスをそのままraxに入れる、アドレスの中の値ではないことに注意
-        printf("   push rax\n");
+    {
+        Var *var = node->var;
+        if (var->is_local)
+        {
+            printf("   lea rax, [rbp-%d]\n", node->var->offset); //leaはrbp-%dがアドレスなので[rbp-%d]として、アドレスをそのままraxに入れる、アドレスの中の値ではないことに注意
+            printf("   push rax\n");
+        }
+        else
+        {
+            //glovbalsの場合変数のラベルのアドレスをpushすればいい
+            printf("   push offset %s\n", var->name);
+        }
+
         return;
-    case ND_DEREF:
+    }
+
+    case ND_DEREF: //勘違いしてはいけないのがint *y=&xみたいな宣言の時の*yと非宣言時で呼ぶ*yのparseの挙動は違うということ
+                   //int *yは宣言なのでNodeとしては単なるVarとなるparseのdeclarationでNode *lhs = new_var(var, tok);としている
+                   // 非宣言の*yだとただ*yと呼ぶときはgenからDerefに行くが、*y=&xの時はassignをつかってderefは直接gen_addrに行く、genではない
+
         gen(node->lhs); //*の後にはVarがあるはずで、それをgenすればgen_adder -> loadで普通は値が取れるんだけど、*aのaにはアドレスが入っているのでアドレスを取得
         return;
     }
 
     error_tok(node->tok, "not an lvalue");
+}
+
+void gen_lval(Node *node)
+{
+    if (node->ty->kind == TY_ARRAY)
+    {
+        error_tok(node->tok, "not an localValue"); //現時点ではint x[20] = 20みたいにしたくないため
+    }
+    gen_addr(node);
 }
 
 void load()
@@ -57,10 +83,16 @@ void gen(Node *node)
         return;
     case ND_VAR:
         gen_addr(node);
-        load();
+        if (node->ty->kind != TY_ARRAY)
+        {
+            //TY_ARRAYの場合だけど、例えばint x[3]; *x = 3とするとして、*xで*はderef、xがND_VAR、TY_ARRAYだからここにくる
+            //この時xに対してgen_addrをするんだけど普通の変数とは違って今の配列xの先頭アドレスだけほしいのでloadはいらない
+            //TY_PTRだったら、&a←こんな感じなのでここにそもそも来ない
+            load();
+        }
         return;
     case ND_ASSIGN:
-        gen_addr(node->lhs);
+        gen_lval(node->lhs); //現時点ではarrayに対し=できないようにする
         gen(node->rhs);
         store();
         return;
@@ -71,7 +103,10 @@ void gen(Node *node)
         gen(node->lhs);
         //ここのgenで*aの場合aなのでND_VARに行って、aの中のアドレスが返ってくるのでそれをloadする、二回loadがいる
         //*&aの場合はgen_addr(&a)でa自体のアドレスが返る
-        load();
+        if (node->ty->kind != TY_ARRAY)
+        {
+            load();
+        }
         return;
     case ND_IF:
     {
@@ -209,13 +244,13 @@ void gen(Node *node)
     switch (node->kind)
     {
     case ND_ADD:
-        if (node->ty->kind == TY_PTR) //add_typeでポインタ型の計算ならnode->tyをTY_PTRにしている
-            printf("   imul rdi, 8\n");
+        if (node->ty->base)
+            printf("   imul rdi, %d\n", size_of(node->ty->base));
         printf("  add rax, rdi\n");
         break;
     case ND_SUB:
-        if (node->ty->kind == TY_PTR)
-            printf("   imul rdi, 8\n");
+        if (node->ty->base)
+            printf("   imul rdi, %d\n", size_of(node->ty->base));
         printf("  sub rax, rdi\n");
         break;
     case ND_MUL:
@@ -250,11 +285,23 @@ void gen(Node *node)
     printf("  push rax\n");
 }
 
-void codegen(Function *prog)
+void emit_data(Program *prog)
 {
-    printf(".intel_syntax noprefix\n");
+    printf(".data\n");
 
-    for (Function *fn = prog; fn; fn = fn->next)
+    for (VarList *vl = prog->globals; vl; vl = vl->next)
+    {
+        Var *var = vl->var;
+        printf("%s:\n", var->name);
+        printf("   .zero %d\n", size_of(var->ty));
+    }
+}
+
+void emit_text(Program *prog)
+{
+    printf(".text\n");
+
+    for (Function *fn = prog->fns; fn; fn = fn->next)
     {
         printf(".global %s\n", fn->name);
         printf("%s:\n", fn->name);
@@ -286,4 +333,11 @@ void codegen(Function *prog)
         printf("   pop rbp\n");
         printf("   ret\n");
     }
+}
+
+void codegen(Program *prog)
+{
+    printf(".intel_syntax noprefix\n");
+    emit_data(prog);
+    emit_text(prog);
 }

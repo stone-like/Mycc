@@ -15,6 +15,25 @@ Type *pointer_to(Type *base)
     return ty;
 }
 
+Type *array_of(Type *base, int size)
+{
+    Type *ty = calloc(1, sizeof(Type));
+    ty->kind = TY_ARRAY;
+    ty->base = base;
+    ty->array_size = size;
+    return ty;
+}
+
+int size_of(Type *ty)
+{
+    if (ty->kind == TY_INT || ty->kind == TY_PTR)
+    {
+        return 8;
+    }
+    assert(ty->kind == TY_ARRAY);
+    return size_of(ty->base) * ty->array_size; //再帰でsizeを獲得
+}
+
 void visit(Node *node)
 {
     if (!node)
@@ -49,18 +68,18 @@ void visit(Node *node)
         node->ty = node->var->ty;
         return;
     case ND_ADD:
-        if (node->rhs->ty->kind == TY_PTR)
+        if (node->rhs->ty->base)
         {
             Node *tmp = node->lhs;
             node->lhs = node->rhs;
             node->rhs = tmp;
         }
-        if (node->rhs->ty->kind == TY_PTR)
+        if (node->rhs->ty->base)
             error_tok(node->tok, "invalid pointer arithmetic operands");
         node->ty = node->lhs->ty;
         return;
     case ND_SUB:
-        if (node->rhs->ty->kind == TY_PTR)
+        if (node->rhs->ty->base)
             error_tok(node->tok, "invalid pointer arithmetic operands");
         node->ty = node->lhs->ty;
         return;
@@ -68,22 +87,35 @@ void visit(Node *node)
         node->ty = node->lhs->ty;
         return;
     case ND_ADDR: //(&x+1)の場合&xはND_ADDRなのでTY_PTRになるので&x add 1 はadd TY_PTRになる
-        node->ty = pointer_to(node->lhs->ty);
+        if (node->lhs->ty->kind == TY_ARRAY)
+        {
+            node->ty = pointer_to(node->lhs->ty->base); //例えば&x[2]だったらintへのポインターに変換する
+        }
+        else
+        {
+            node->ty = pointer_to(node->lhs->ty);
+        }
         return;
     case ND_DEREF:
-        if (node->lhs->ty->kind != TY_PTR) // * &aの時、*のタイプはaのタイプになる、つまり*&aを計算した最終的な値の型ということでいい？
-                                           //* の後には必ず何らかの形でアドレスが来なくてはいけない
+        if (!node->lhs->ty->base) // * &aの時、*のタイプはaのタイプになる、つまり*&aを計算した最終的な値の型ということでいい？
+                                  //* の後には必ず何らかの形でアドレスが来なくてはいけない
             error_tok(node->tok, "invalid pointer dereference");
         node->ty = node->lhs->ty->base;
 
+        return;
+    case ND_SIZEOF: //ノードタイプをSIZEOFからNUMへ変化させる
+        node->kind = ND_NUM;
+        node->ty = int_type();
+        node->val = size_of(node->lhs->ty);
+        node->lhs = NULL;
         return;
     }
 }
 
 //作成済みのNodeに対して型を付けていく、Nodeの最終的な返り値を型にするっぽい
-void add_type(Function *prog)
+void add_type(Program *prog)
 {
-    for (Function *fn = prog; fn; fn = fn->next)
+    for (Function *fn = prog->fns; fn; fn = fn->next)
         for (Node *node = fn->node; node; node = node->next)
             visit(node);
 }
