@@ -18,17 +18,21 @@ int main(int argc, char **argv)
 
     token = tokenize(); //TokList作成
 
-    Program *prog = program();
+    Function *prog = program();
+
+    add_type(prog);
 
     //localsがprogで作られているのでoffsetを計算、実際にスタックにロードするのに備える
-    int offset = 0;
-    for (Var *var = prog->locals; var; var = var->next)
+    for (Function *fn = prog; fn; fn = fn->next)
     {
-        offset += 8;
-        var->offset = offset;
+        int offset = 0;
+        for (VarList *vl = fn->locals; vl; vl = vl->next)
+        {
+            offset += 8;
+            vl->var->offset = offset;
+        }
+        fn->stack_size = offset;
     }
-
-    prog->stack_size = offset;
 
     codegen(prog);
 

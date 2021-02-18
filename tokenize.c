@@ -5,15 +5,35 @@ Token *token;
 
 char *user_input;
 
-void error_at(char *loc, char *fmt, ...)
+void verror_at(char *loc, char *fmt, va_list ap)
 {
-    va_list ap;
-    va_start(ap, fmt);
+    // va_list ap;
+    // va_start(ap, fmt);
 
     int pos = loc - user_input; //アドレスの場所の差をとる,例えばアドレス400がLocで390がuser_inputだったら10が出てくる
     fprintf(stderr, "%s\n", user_input);
     fprintf(stderr, "%*s", pos, " "); // pos個の空白を出力
     fprintf(stderr, "^ ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    exit(1);
+}
+
+void error_at(char *loc, char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    verror_at(loc, fmt, ap);
+}
+
+// Reports an error location and exit.
+void error_tok(Token *tok, char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    if (tok)
+        verror_at(tok->str, fmt, ap);
+
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     exit(1);
@@ -37,13 +57,21 @@ char *strndup(char *p, int len)
     return buf;
 }
 
-bool consume(char *op)
+Token *peek(char *s)
 {
     //二文字以上の演算子を取れるように改良
-    if (token->kind != TK_RESERVED || strlen(op) != token->len || memcmp(token->str, op, token->len))
-        return false;
+    if (token->kind != TK_RESERVED || strlen(s) != token->len || memcmp(token->str, s, token->len))
+        return NULL;
+    return token;
+}
+Token *consume(char *op)
+{
+
+    if (!peek(op))
+        return NULL;
+    Token *t = token;
     token = token->next;
-    return true;
+    return t;
 }
 
 Token *consume_ident()
@@ -59,18 +87,27 @@ void expect(char *op)
 {
     // 次のトークンが期待している記号のときには、トークンを1つ読み進める。
     // それ以外の場合にはエラーを報告する。
-    if (token->kind != TK_RESERVED || strlen(op) != token->len || memcmp(token->str, op, token->len))
-        error_at(token->str, "'%c'ではありません", op);
+    if (!peek(op))
+        error_tok(token, "'%c'ではありません", op);
     token = token->next;
 }
 
 int expect_number()
 {
     if (token->kind != TK_NUM)
-        error_at(token->str, "数ではありません");
+        error_tok(token, "数ではありません");
     int val = token->val;
     token = token->next;
     return val;
+}
+
+char *expect_ident()
+{
+    if (token->kind != TK_IDENT)
+        error_tok(token, "expected an identifier");
+    char *s = strndup(token->str, token->len);
+    token = token->next;
+    return s;
 }
 
 bool at_eof()
@@ -107,7 +144,7 @@ bool is_alnum(char c)
 char *starts_with_reserved(char *p)
 {
     //Keyword
-    static char *kw[] = {"return", "if", "else", "while", "for"};
+    static char *kw[] = {"return", "if", "else", "while", "for", "int"};
 
     //sizeof(kw)/sizeof(*kw)は配列のlen
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -165,7 +202,7 @@ Token *tokenize()
         }
 
         // Single-letter punctuator
-        if (strchr("+-*/()<>;={},", *p))
+        if (strchr("+-*/()<>;={},&", *p))
         {
             cur = new_token(TK_RESERVED, cur, p++, 1);
             continue;

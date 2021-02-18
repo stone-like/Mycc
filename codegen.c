@@ -1,19 +1,26 @@
 #include "Mycc.h"
 
-int labelseq = 0;                                          //複数if文とカあるときにlabelがかぶらないように
 char *argreg[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"}; //関数の引数リスト、現在6引数まで
+
+int labelseq = 0; //複数if文とカあるときにlabelがかぶらないように
+char *funcname;
+
+void gen(Node *node);
 
 void gen_addr(Node *node)
 {
-    if (node->kind == ND_VAR)
+    switch (node->kind)
     {
-
+    case ND_VAR:
         printf("   lea rax, [rbp-%d]\n", node->var->offset); //leaはrbp-%dがアドレスなので[rbp-%d]として、アドレスをそのままraxに入れる、アドレスの中の値ではないことに注意
         printf("   push rax\n");
         return;
+    case ND_DEREF:
+        gen(node->lhs); //*の後にはVarがあるはずで、それをgenすればgen_adder -> loadで普通は値が取れるんだけど、*aのaにはアドレスが入っているのでアドレスを取得
+        return;
     }
 
-    error("not an lvalue");
+    error_tok(node->tok, "not an lvalue");
 }
 
 void load()
@@ -38,6 +45,8 @@ void gen(Node *node)
 
     switch (node->kind)
     {
+    case ND_NULL:
+        return; //初期化式のダミー用？
     case ND_NUM:
         printf("   push %d\n", node->val);
         return;
@@ -54,6 +63,15 @@ void gen(Node *node)
         gen_addr(node->lhs);
         gen(node->rhs);
         store();
+        return;
+    case ND_ADDR:
+        gen_addr(node->lhs); //&aの時でアドレスが欲しいのでloadをしないでgen_addrまで
+        return;
+    case ND_DEREF:
+        gen(node->lhs);
+        //ここのgenで*aの場合aなのでND_VARに行って、aの中のアドレスが返ってくるのでそれをloadする、二回loadがいる
+        //*&aの場合はgen_addr(&a)でa自体のアドレスが返る
+        load();
         return;
     case ND_IF:
     {
@@ -159,7 +177,7 @@ void gen(Node *node)
     case ND_RETURN:
         gen(node->lhs);
         printf("   pop rax\n");
-        printf("   jmp .Lreturn\n");
+        printf("   jmp .Lreturn.%s\n", funcname);
         return;
     }
 
@@ -191,9 +209,13 @@ void gen(Node *node)
     switch (node->kind)
     {
     case ND_ADD:
+        if (node->ty->kind == TY_PTR) //add_typeでポインタ型の計算ならnode->tyをTY_PTRにしている
+            printf("   imul rdi, 8\n");
         printf("  add rax, rdi\n");
         break;
     case ND_SUB:
+        if (node->ty->kind == TY_PTR)
+            printf("   imul rdi, 8\n");
         printf("  sub rax, rdi\n");
         break;
     case ND_MUL:
@@ -228,26 +250,40 @@ void gen(Node *node)
     printf("  push rax\n");
 }
 
-void codegen(Program *prog)
+void codegen(Function *prog)
 {
     printf(".intel_syntax noprefix\n");
-    printf(".global main\n");
-    printf("main:\n");
 
-    //Prologue
-    printf("   push rbp\n");
-    printf("   mov rbp, rsp\n");
-    printf("   sub rsp, %d\n", prog->stack_size);
-
-    for (Node *n = prog->node; n; n = n->next)
+    for (Function *fn = prog; fn; fn = fn->next)
     {
-        gen(n);
-        // printf("   pop rax\n");
-    }
+        printf(".global %s\n", fn->name);
+        printf("%s:\n", fn->name);
+        funcname = fn->name;
 
-    //Epilogue
-    printf(".Lreturn:\n");
-    printf("   mov rsp, rbp\n");
-    printf("   pop rbp\n");
-    printf("  ret\n");
+        //Prologue
+        printf("   push rbp\n");
+        printf("   mov rbp, rsp\n");
+        printf("   sub rsp,%d\n", fn->stack_size);
+
+        //Push arguements to the stack
+        int i = 0; //fnごと
+        for (VarList *vl = fn->params; vl; vl = vl->next)
+        {
+            Var *var = vl->var; //いつargregに値が入るかは、このFnをCallした時に値を入れている
+            //例えば'main() { return add2(3,4); } add2(x,y) { return x+y; }'なら
+            //ここではadd2をアセンブリ化していて、argreg[0],[1]はmainでadd2を呼ぶ、つまりmain()をアセンブリ化しているときのadd2のFnCall部分でargregに値を入れている
+            printf("   mov [rbp-%d], %s\n", var->offset, argreg[i++]);
+        }
+        //Emit Code
+        for (Node *node = fn->node; node; node = node->next)
+        {
+            gen(node);
+        } //ここまでで返り値はraxに入っているはず
+
+        //Epilogue
+        printf(".Lreturn.%s:\n", funcname);
+        printf("   mov rsp, rbp\n");
+        printf("   pop rbp\n");
+        printf("   ret\n");
+    }
 }

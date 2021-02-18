@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct Type Type;
+
 //
 // tokenize.c
 //
@@ -30,9 +32,12 @@ struct Token
 
 void error(char *fmt, ...);
 void error_at(char *loc, char *fmt, ...);
-bool consume(char *op);
+void error_tok(Token *tok, char *fmt, ...);
+Token *peek(char *s);
+Token *consume(char *op);
 char *strndup(char *p, int len);
 Token *consume_ident();
+char *expect_ident();
 void expect(char *op);
 int expect_number();
 bool at_eof();
@@ -50,9 +55,16 @@ extern Token *token;
 typedef struct Var Var;
 struct Var
 {
-    Var *next;
     char *name;
+    Type *ty;
     int offset; //Offset from RBP
+};
+
+typedef struct VarList VarList;
+struct VarList
+{
+    VarList *next;
+    Var *var;
 };
 
 //AST Node
@@ -67,6 +79,8 @@ typedef enum
     ND_LT,        // <
     ND_LE,        // <=
     ND_ASSIGN,    // =
+    ND_ADDR,      // unary &
+    ND_DEREF,     // unary *
     ND_RETURN,    //Return
     ND_IF,        // "if"
     ND_WHILE,     // "while"
@@ -76,6 +90,7 @@ typedef enum
     ND_EXPR_STMT, // Expression statement
     ND_VAR,       // variable
     ND_NUM,       // Integer
+    ND_NULL,      //EmptyStatement
 } NodeKind;
 
 // AST node type
@@ -87,6 +102,9 @@ struct Node
                    //Node ->  Node  ->とStatement単位に連なっていくNodeと
                    //  |
                    //LeftNode RightNodeとNestするNodeになっている
+
+    Type *ty;   //Type, e.g. int or pointer to int
+    Token *tok; //Representitive token
 
     Node *lhs; // Left-hand side
     Node *rhs; // Right-hand side
@@ -109,17 +127,41 @@ struct Node
     int val;  // Used if kind == ND_NUM
 };
 
-typedef struct
-{
-    Node *node;
-    Var *locals;
-    int stack_size;
-} Program;
+typedef struct Function Function;
 
-Program *program();
+struct Function
+{
+    Function *next;
+    char *name;
+    VarList *params;
+    Node *node;
+    VarList *locals;
+    int stack_size;
+};
+
+Function *program();
+
+// type.c
+
+typedef enum
+{
+    TY_INT,
+    TY_PTR
+} TypeKind;
+
+struct Type
+{
+    TypeKind kind;
+    Type *base;
+};
+
+Type *int_type();
+Type *pointer_to(Type *base);
+
+void add_type(Function *prog);
 
 //
 // codegen.c
 //
 
-void codegen(Program *prog);
+void codegen(Function *prog);
