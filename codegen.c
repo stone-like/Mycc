@@ -192,6 +192,7 @@ void gen(Node *node)
         return;
     }
     case ND_BLOCK:
+    case ND_STMT_EXPR:
         for (Node *n = node->body; n; n = n->next)
         {
             gen(n);
@@ -230,7 +231,7 @@ void gen(Node *node)
     }
 
     case ND_RETURN:
-        gen(node->lhs);
+        gen(node->lhs); //関数のretとreturnはあまり関係がない、retではraxに積むことはしないので、returnでraxに返り値を積む
         printf("   pop rax\n");
         printf("   jmp .Lreturn.%s\n", funcname);
         return;

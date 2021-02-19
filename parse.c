@@ -2,20 +2,36 @@
 
 VarList *locals;
 VarList *globals;
+VarList *scope; //そこまでに含まれている変数、localsは関数全体だが、scopeはint main(){int x; int y;}のint xの部分までだったらxまでとなる
 
+// Find variable by name.
 Var *find_var(Token *tok)
 {
-    //For Locals
-    for (VarList *vl = locals; vl; vl = vl->next)
-    {
-        Var *var = vl->var;
-        //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
-        if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
-            return var;
-    }
 
-    //For Globals
-    for (VarList *vl = globals; vl; vl = vl->next)
+    // //For Locals
+    // for (VarList *vl = locals; vl; vl = vl->next)
+    // {
+    //     Var *var = vl->var;
+    //     //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
+    //     if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
+    //         return var;
+    // }
+
+    // //For Globals
+    // for (VarList *vl = globals; vl; vl = vl->next)
+    // {
+    //     Var *var = vl->var;
+    //     //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
+    //     if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
+    //         return var;
+    // }
+
+    //scopeのみでfindすると例えば
+    //'int main() { int x=2; { int x=3; } return x; }'
+    //みたいなやつでreturn　xのときにfindしてもx=2しかない
+    //ただ、localの方にはx=2とx=3のやつがあるし、Block内でfindすると後に追加されたx=3のやつが来る
+    //単にローカル、グローバル関係なくスコープの中から探せばいい
+    for (VarList *vl = scope; vl; vl = vl->next)
     {
         Var *var = vl->var;
         //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
@@ -88,6 +104,12 @@ Var *push_var(char *name, Type *ty, bool is_local)
         vl->next = globals;
         globals = vl;
     }
+
+    //ローカル、グローバル関係なく現時点までの変数をすべて追加
+    VarList *sc = calloc(1, sizeof(VarList));
+    sc->var = var;
+    sc->next = scope;
+    scope = sc;
 
     return var;
 }
@@ -374,11 +396,16 @@ Node *stmt()
         head.next = NULL;
         Node *cur = &head;
 
+        //NodeBlockにscopeを追加,ここのscopeの生存期間はBlockの中でだけ
+        VarList *sc = scope;
+
         while (!consume("}"))
         {
             cur->next = stmt();
             cur = cur->next;
         }
+
+        scope = sc; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
 
         Node *node = new_node(ND_BLOCK, tok);
         node->body = head.next;
@@ -543,7 +570,44 @@ Node *func_args()
     return head;
 }
 
-//primary = "(" expr ")" | "sizeof" unary | ident func-args? | str | num
+// stmt-expr = "(" "{" stmt stmt* "}" ")"
+//StatementExpressionは({...})みたいに使う、BlockStatementと区別したい
+//で、返すのはExpressionStatement
+//Statement expression is a GNU C extensionらしい
+Node *stmt_expr(Token *tok)
+{
+    VarList *sc = scope;
+
+    Node *node = new_node(ND_STMT_EXPR, tok);
+    node->body = stmt();
+    Node *cur = node->body;
+
+    while (!consume("}"))
+    {
+        cur->next = stmt();
+        cur = cur->next;
+    }
+
+    expect(")");
+
+    scope = sc;
+    //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
+
+    if (cur->kind != ND_EXPR_STMT)
+    {
+        error_tok(cur->tok, "stmt expr returning void is not supported");
+    }
+
+    *cur = *cur->lhs; //return ({ 0; 1; 2; });とあるとしたら0;1;2;は全部ExprStatementだけど、最後だけlhsをとってnumにする、これは型を付けるときに最後のstaementをみてTypeを付けるため
+    //ここまで来た時のcurは最後、上記の例なら2;のExprStatement(curはどんどんnextに行くので最初node->bodyの時のcurではない,node->bodyは相変わらずcurを指したままだけど)
+
+    // Node *read_expr_stmt()でnew_unary(ND_EXPR_STMT, expr(), tok);を返すので、ND_EXPR_STMTのlhsということ
+
+    return node;
+}
+
+//primary = "(" "{" stmt-expr-tail "}" ")"
+//           |  "(" expr ")" | "sizeof" unary | ident func-args? | str | num
 
 Node *primary()
 {
@@ -551,6 +615,11 @@ Node *primary()
 
     if (consume("("))
     {
+        if (consume("{"))
+        { //"(" "{" の並びはStatementExpression
+            return stmt_expr(tok);
+        }
+
         //次のトークンが"("なら、"("　expr　")"となっているはず
         Node *node = expr();
         expect(")");

@@ -1,17 +1,42 @@
 #include "Mycc.h"
 
+char *filename;
 //現在着目しているトークン
 Token *token;
 
 char *user_input;
 
+// Reports an error message in the following format and exit
+//
+// foo.c:10: x = y+1;
+//               ^ <error message here>
+
 void verror_at(char *loc, char *fmt, va_list ap)
 {
-    // va_list ap;
-    // va_start(ap, fmt);
 
-    int pos = loc - user_input; //アドレスの場所の差をとる,例えばアドレス400がLocで390がuser_inputだったら10が出てくる
-    fprintf(stderr, "%s\n", user_input);
+    //Find a line containing "loc".
+    char *line = loc;
+    while (user_input < line && line[-1] != '\n')
+        line--;
+
+    char *end = loc;
+    while (*end != '\n')
+        end++;
+
+    //Get a line number.
+    int line_num = 1;
+    for (char *p = user_input; p < line; p++)
+    {
+        if (*p == '\n')
+            line_num++;
+    }
+
+    //Print out the line.
+    int indent = fprintf(stderr, "%s:%d", filename, line_num);
+    fprintf(stderr, "%.*s\n", (int)(end - line), line);
+
+    //Show the error message.
+    int pos = loc - line + indent;
     fprintf(stderr, "%*s", pos, " "); // pos個の空白を出力
     fprintf(stderr, "^ ");
     vfprintf(stderr, fmt, ap);
@@ -166,6 +191,67 @@ char *starts_with_reserved(char *p)
     return NULL;
 }
 
+char get_escape_char(char c)
+{
+    switch (c)
+    {
+    case 'a':
+        return '\a';
+    case 'b':
+        return '\b';
+    case 't':
+        return '\t';
+    case 'n':
+        return '\n';
+    case 'v':
+        return '\v';
+    case 'f':
+        return '\f';
+    case 'r':
+        return '\r';
+    case 'e':
+        return 27;
+    case '0':
+        return 0;
+    default:
+        return c;
+    }
+}
+
+Token *read_string_literal(Token *cur, char *start)
+{
+    char *p = start + 1;
+    char buf[1024];
+    int len = 0;
+
+    for (;;)
+    {
+        if (len == sizeof(buf))
+            error_at(start, "string literal too large");
+        if (*p == '\0')
+            error_at(start, "unclod string literal");
+        if (*p == '"')
+            break;
+
+        if (*p == '\\')
+        {
+            p++;
+            buf[len++] = get_escape_char(*p++);
+        }
+        else
+        {
+            buf[len++] = *p++;
+        }
+    }
+
+    Token *tok = new_token(TK_STR, cur, start, p - start + 1);
+    tok->contents = malloc(len + 1);
+    memcpy(tok->contents, buf, len);
+    tok->contents[len] = '\0';
+    tok->count_len = len + 1; //\0の分+1
+    return tok;
+}
+
 Token *tokenize()
 {
 
@@ -180,6 +266,30 @@ Token *tokenize()
         if (isspace(*p))
         {
             p++;
+            continue;
+        }
+
+        //Skip line comments.
+        if (startswith(p, "//"))
+        {
+            p += 2;
+            while (*p != '\n')
+            {
+                p++;
+            }
+
+            continue;
+        }
+
+        //Skip block comments.
+        if (startswith(p, "/*"))
+        {
+            char *q = strstr(p + 2, "*/");
+            if (!q)
+            {
+                error_at(p, "unclosed block comment");
+            }
+            p = q + 2; //*/分飛ばす
             continue;
         }
 
@@ -223,22 +333,8 @@ Token *tokenize()
         //String Literal
         if (*p == '"')
         {
-            char *q = p++;
-            while (*p && *p != '"')
-            {
-                p++;
-            }
-
-            if (!*p)
-            {
-                error_at(q, "unclosed string literal");
-            }
-
-            p++; //最後の”の次へ
-
-            cur = new_token(TK_STR, cur, q, p - q);
-            cur->contents = strndup(q + 1, p - q - 2);
-            cur->count_len = p - q - 1;
+            cur = read_string_literal(cur, p);
+            p += cur->len;
             continue;
         }
 

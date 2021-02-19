@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -49,6 +50,7 @@ bool at_eof();
 Token *new_token(TokenKind kind, Token *cur, char *str, int len);
 Token *tokenize();
 
+extern char *filename;
 extern char *user_input;
 extern Token *token;
 
@@ -101,6 +103,7 @@ typedef enum
     ND_BLOCK,     // {...}
     ND_FUNCALL,   //Function Call
     ND_EXPR_STMT, // Expression statement
+    ND_STMT_EXPR, // Statement Expression 文を式として扱える、例えばreturn { int x=2; x;}とかできる
     ND_VAR,       // variable
     ND_NUM,       // Integer
     ND_NULL,      //EmptyStatement
@@ -129,7 +132,7 @@ struct Node
     Node *init;
     Node *inc;
 
-    // Block
+    // Block　or StatementExpression
     Node *body;
 
     //Function Call
