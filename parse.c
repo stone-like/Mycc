@@ -92,6 +92,14 @@ Var *push_var(char *name, Type *ty, bool is_local)
     return var;
 }
 
+char *new_label()
+{
+    static int cnt = 0;
+    char buf[20];
+    sprintf(buf, ".L.data.%d", cnt++);
+    return strndup(buf, 20);
+}
+
 Function *function();
 Type *basetype();
 void global_var();
@@ -148,11 +156,21 @@ Program *program()
     return prog;
 }
 
-// basetype = "int" "*"* //*が0個以上
+// basetype = ("char" | int") "*"* //*が0個以上
 Type *basetype()
 {
-    expect("int");
-    Type *ty = int_type();
+    Type *ty;
+
+    if (consume("char"))
+    {
+        ty = char_type();
+    }
+    else
+    {
+        expect("int");
+        ty = int_type();
+    }
+
     while (consume("*"))
         ty = pointer_to(ty); //例えばint **だったらtyはTY_PTR(
                              //                       base=TY_PTR(
@@ -274,6 +292,11 @@ Node *read_expr_stmt()
     return new_unary(ND_EXPR_STMT, expr(), tok);
 }
 
+bool is_typename()
+{
+    return peek("char") || peek("int");
+}
+
 // stmt = "return" expr ";"
 //        | "if" "(" expr ")" stmt ("else" stmt)?
 //        | "while" "(" expr ")" stmt
@@ -362,7 +385,7 @@ Node *stmt()
         return node;
     }
 
-    if (tok = peek("int"))
+    if (is_typename())
         return declaration();
 
     Node *node = read_expr_stmt();
@@ -520,7 +543,8 @@ Node *func_args()
     return head;
 }
 
-//primary = "(" expr ")" | "sizeof" unary | ident func-args?| num
+//primary = "(" expr ")" | "sizeof" unary | ident func-args? | str | num
+
 Node *primary()
 {
     Token *tok;
@@ -556,6 +580,20 @@ Node *primary()
     }
 
     tok = token; //primaryでnumの場合
+
+    if (tok->kind == TK_STR)
+    {
+
+        token = token->next;
+
+        Type *ty = array_of(char_type(), tok->count_len);
+        Var *var = push_var(new_label(), ty, false);
+        var->contents = tok->contents;
+        var->count_len = tok->count_len;
+
+        return new_var(var, tok);
+    }
+
     if (tok->kind != TK_NUM)
         error_tok(tok, "expected num");
 

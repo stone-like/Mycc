@@ -144,7 +144,7 @@ bool is_alnum(char c)
 char *starts_with_reserved(char *p)
 {
     //Keyword
-    static char *kw[] = {"return", "if", "else", "while", "for", "int", "sizeof"};
+    static char *kw[] = {"return", "if", "else", "while", "for", "int", "sizeof", "char"};
 
     //sizeof(kw)/sizeof(*kw)は配列のlen
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -220,6 +220,29 @@ Token *tokenize()
             continue;
         }
 
+        //String Literal
+        if (*p == '"')
+        {
+            char *q = p++;
+            while (*p && *p != '"')
+            {
+                p++;
+            }
+
+            if (!*p)
+            {
+                error_at(q, "unclosed string literal");
+            }
+
+            p++; //最後の”の次へ
+
+            cur = new_token(TK_STR, cur, q, p - q);
+            cur->contents = strndup(q + 1, p - q - 2);
+            cur->count_len = p - q - 1;
+            continue;
+        }
+
+        //Integer Literal
         if (isdigit(*p))
         {
             cur = new_token(TK_NUM, cur, p, 0);

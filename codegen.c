@@ -1,6 +1,7 @@
 #include "Mycc.h"
 
-char *argreg[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"}; //関数の引数リスト、現在6引数まで
+char *argreg1[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"}; //それぞれ下記の下位8byte？
+char *argreg8[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"}; //関数の引数リスト、現在6引数まで
 
 int labelseq = 0; //複数if文とカあるときにlabelがかぶらないように
 char *funcname;
@@ -49,20 +50,39 @@ void gen_lval(Node *node)
     gen_addr(node);
 }
 
-void load()
+//charがあるので、正しくスタック操作できるように
+void load(Type *ty)
 {
     //loadの直前でアドレスがスタックトップにあるはずなので
     printf("   pop rax\n");
-    printf("   mov rax, [rax]\n");
+
+    if (size_of(ty) == 1)
+    {
+        printf("   movsx rax,byte ptr [rax]\n");
+    }
+    else
+    {
+        printf("   mov rax, [rax]\n");
+    }
+
     printf("   push rax\n");
 }
 
-void store()
+void store(Type *ty)
 {
     //storeの直前で、スタックトップに右辺、次に左辺値(アドレス)があるはずなので
     printf("   pop rdi\n");
     printf("   pop rax\n");
-    printf("   mov [rax], rdi\n");
+
+    if (size_of(ty) == 1)
+    {
+        printf("   mov [rax], dil\n");
+    }
+    else
+    {
+        printf("   mov [rax], rdi\n");
+    }
+
     printf("   push rdi\n");
 }
 
@@ -88,13 +108,13 @@ void gen(Node *node)
             //TY_ARRAYの場合だけど、例えばint x[3]; *x = 3とするとして、*xで*はderef、xがND_VAR、TY_ARRAYだからここにくる
             //この時xに対してgen_addrをするんだけど普通の変数とは違って今の配列xの先頭アドレスだけほしいのでloadはいらない
             //TY_PTRだったら、&a←こんな感じなのでここにそもそも来ない
-            load();
+            load(node->ty);
         }
         return;
     case ND_ASSIGN:
         gen_lval(node->lhs); //現時点ではarrayに対し=できないようにする
         gen(node->rhs);
-        store();
+        store(node->ty);
         return;
     case ND_ADDR:
         gen_addr(node->lhs); //&aの時でアドレスが欲しいのでloadをしないでgen_addrまで
@@ -105,7 +125,7 @@ void gen(Node *node)
         //*&aの場合はgen_addr(&a)でa自体のアドレスが返る
         if (node->ty->kind != TY_ARRAY)
         {
-            load();
+            load(node->ty);
         }
         return;
     case ND_IF:
@@ -188,7 +208,7 @@ void gen(Node *node)
 
         for (int i = nargs - 1; i >= 0; i--)
         {
-            printf("   pop %s\n", argreg[i]); //argregに値を入れていく
+            printf("   pop %s\n", argreg8[i]); //argregに値を入れていく
         }
 
         //RSPを16byteAlignする、可変長引数のためにraxを0にセットしておく
@@ -293,7 +313,32 @@ void emit_data(Program *prog)
     {
         Var *var = vl->var;
         printf("%s:\n", var->name);
-        printf("   .zero %d\n", size_of(var->ty));
+
+        if (!var->contents)
+        {
+            //""みたいに空Stringだったら
+            printf("   .zero %d\n", size_of(var->ty));
+            continue;
+        }
+
+        for (int i = 0; i < var->count_len; i++)
+        {
+            printf("   .byte %d\n", var->contents[i]);
+        }
+    }
+}
+
+void load_arg(Var *var, int idx)
+{
+    int sz = size_of(var->ty);
+    if (sz == 1)
+    {
+        printf("   mov [rbp-%d], %s\n", var->offset, argreg1[idx]);
+    }
+    else
+    {
+        assert(sz == 8);
+        printf("   mov [rbp-%d], %s\n", var->offset, argreg8[idx]);
     }
 }
 
@@ -316,10 +361,10 @@ void emit_text(Program *prog)
         int i = 0; //fnごと
         for (VarList *vl = fn->params; vl; vl = vl->next)
         {
-            Var *var = vl->var; //いつargregに値が入るかは、このFnをCallした時に値を入れている
+            //いつargregに値が入るかは、このFnをCallした時に値を入れている
             //例えば'main() { return add2(3,4); } add2(x,y) { return x+y; }'なら
             //ここではadd2をアセンブリ化していて、argreg[0],[1]はmainでadd2を呼ぶ、つまりmain()をアセンブリ化しているときのadd2のFnCall部分でargregに値を入れている
-            printf("   mov [rbp-%d], %s\n", var->offset, argreg[i++]);
+            load_arg(vl->var, i++);
         }
         //Emit Code
         for (Node *node = fn->node; node; node = node->next)
