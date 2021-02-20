@@ -1,5 +1,17 @@
 #include "Mycc.h"
 
+// Scope for local var,global var or typedefs
+
+typedef struct VarScope VarScope;
+
+struct VarScope
+{
+    VarScope *next;
+    char *name;
+    Var *var;
+    Type *type_def;
+};
+
 // Scope For Struct Tag
 typedef struct TagScope TagScope;
 struct TagScope
@@ -11,42 +23,26 @@ struct TagScope
 
 VarList *locals;
 VarList *globals;
-VarList *scope; //そこまでに含まれている変数、localsは関数全体だが、scopeはint main(){int x; int y;}のint xの部分までだったらxまでとなる
+VarScope *var_scope; //そこまでに含まれている変数、localsは関数全体だが、scopeはint main(){int x; int y;}のint xの部分までだったらxまでとなる
+//scopeにはtypedefMemberがある
+
 TagScope *tag_scope;
 
-// Find variable by name.
-Var *find_var(Token *tok)
+// Find variable or a typedef by name.
+VarScope *find_var(Token *tok)
 {
-
-    // //For Locals
-    // for (VarList *vl = locals; vl; vl = vl->next)
-    // {
-    //     Var *var = vl->var;
-    //     //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
-    //     if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
-    //         return var;
-    // }
-
-    // //For Globals
-    // for (VarList *vl = globals; vl; vl = vl->next)
-    // {
-    //     Var *var = vl->var;
-    //     //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
-    //     if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
-    //         return var;
-    // }
 
     //scopeのみでfindすると例えば
     //'int main() { int x=2; { int x=3; } return x; }'
     //みたいなやつでreturn　xのときにfindしてもx=2しかない
     //ただ、localの方にはx=2とx=3のやつがあるし、Block内でfindすると後に追加されたx=3のやつが来る
     //単にローカル、グローバル関係なくスコープの中から探せばいい
-    for (VarList *vl = scope; vl; vl = vl->next)
+
+    for (VarScope *sc = var_scope; sc; sc = sc->next)
     {
-        Var *var = vl->var;
         //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
-        if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
-            return var;
+        if (strlen(sc->name) == tok->len && !memcmp(tok->str, sc->name, tok->len))
+            return sc;
     }
 
     return NULL;
@@ -104,6 +100,16 @@ Node *new_var(Var *var, Token *tok)
     return node;
 }
 
+//typedef int xならxをintとして扱う
+VarScope *push_scope(char *name)
+{
+    VarScope *sc = calloc(1, sizeof(VarScope));
+    sc->name = name;
+    sc->next = var_scope;
+    var_scope = sc;
+    return sc;
+}
+
 //NodeごとにTypeを入れるときに、Varの場合はnode->ty = node->var->tyとなる
 //localsに追加
 Var *push_var(char *name, Type *ty, bool is_local)
@@ -129,12 +135,23 @@ Var *push_var(char *name, Type *ty, bool is_local)
     }
 
     //ローカル、グローバル関係なく現時点までの変数をすべて追加
-    VarList *sc = calloc(1, sizeof(VarList));
-    sc->var = var;
-    sc->next = scope;
-    scope = sc;
+    push_scope(name)->var = var;
 
     return var;
+}
+
+Type *find_typedef(Token *tok)
+{
+    if (tok->kind == TK_IDENT)
+    {
+        VarScope *sc = find_var(token);
+        if (sc)
+        {
+            return sc->type_def;
+        }
+    }
+
+    return NULL;
 }
 
 char *new_label()
@@ -204,7 +221,10 @@ Program *program()
     return prog;
 }
 
-// basetype = ("char" | int" | struct-declaration) "*"* //*が0個以上
+// basetype = ("char" | int" | struct-declaration | typedef-name ) "*"* //*が0個以上
+//basetypeではtypedefで宣言された typedef int xのxも処理する
+//このときのxはただの変数ではあるが、VarScopeのtypedefにType構造体でtyがINTのやつ(stmt()のtypedefの処理の時にbasetype()から作ったやつ)が入っている
+
 Type *basetype()
 {
     if (!is_typename(token))
@@ -220,10 +240,16 @@ Type *basetype()
     {
         ty = int_type();
     }
-    else
+    else if (consume("struct"))
     {
         ty = struct_declaration();
     }
+    else
+    {
+        ty = find_var(consume_ident())->type_def; //こういうAlias系が結構面白い
+    }
+
+    assert(ty);
 
     while (consume("*"))
         ty = pointer_to(ty); //例えばint **だったらtyはTY_PTR(
@@ -260,7 +286,7 @@ Type *struct_declaration()
 { //struct declarationはTY_STRUCTを返す
 
     //Read struct members.
-    expect("struct");
+    // expect("struct");  ??
 
     // Read a struct tag.
     Token *tag = consume_ident();
@@ -440,7 +466,7 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("char") || peek("int") || peek("struct");
+    return peek("char") || peek("int") || peek("struct") || find_typedef(token);
 }
 
 // stmt = "return" expr ";"
@@ -448,6 +474,7 @@ bool is_typename()
 //        | "while" "(" expr ")" stmt
 //        | "for" "(" expr? ";" expr? ";" expr? ")" stmt
 //        | "{" stmt* "}"
+//        | "typedef" basetype ident ( "[" num "]")* ";"
 //        | declaration
 //        | expr ";"
 
@@ -521,7 +548,7 @@ Node *stmt()
         Node *cur = &head;
 
         //NodeBlockにscopeを追加,ここのscopeの生存期間はBlockの中でだけ
-        VarList *sc1 = scope;
+        VarScope *sc1 = var_scope;
         TagScope *sc2 = tag_scope;
 
         while (!consume("}"))
@@ -530,12 +557,25 @@ Node *stmt()
             cur = cur->next;
         }
 
-        scope = sc1; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
+        var_scope = sc1; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
         tag_scope = sc2;
 
         Node *node = new_node(ND_BLOCK, tok);
         node->body = head.next;
         return node;
+    }
+
+    if (tok = consume("typedef"))
+    {
+        Type *ty = basetype();
+        char *name = expect_ident();
+        ty = read_type_suffix(ty);
+
+        expect(";");
+
+        push_scope(name)->type_def = ty;
+        //ここで "name"を読み取ったタイプとして扱う、ここでの役割はこれだけ、codegenではもう必要ないのでND_NULL
+        return new_node(ND_NULL, tok);
     }
 
     if (is_typename())
@@ -727,7 +767,7 @@ Node *func_args()
 //Statement expression is a GNU C extensionらしい
 Node *stmt_expr(Token *tok)
 {
-    VarList *sc1 = scope;
+    VarScope *sc1 = var_scope;
     TagScope *sc2 = tag_scope;
 
     Node *node = new_node(ND_STMT_EXPR, tok);
@@ -742,7 +782,7 @@ Node *stmt_expr(Token *tok)
 
     expect(")");
 
-    scope = sc1;
+    var_scope = sc1;
     tag_scope = sc2;
     //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
 
@@ -793,12 +833,13 @@ Node *primary()
         }
 
         //普通のidentであってもint x;かint x = 5;みたいに事前に宣言されているはずなのでfind_varできなかったらエラー
-        Var *var = find_var(tok);
-        if (!var)
+        VarScope *sc = find_var(tok);
+        if (!(sc && sc->var))
         {
             error_tok(tok, "undefined variable");
         }
-        return new_var(var, tok);
+
+        return new_var(sc->var, tok);
     }
 
     tok = token; //primaryでnumの場合
@@ -806,7 +847,7 @@ Node *primary()
     if (tok->kind == TK_STR)
     {
 
-        token = token->next;
+        token = token->next; //これはただ次のtokenに行くだけ
 
         Type *ty = array_of(char_type(), tok->count_len);
         Var *var = push_var(new_label(), ty, false);
