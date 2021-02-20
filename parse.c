@@ -1,8 +1,18 @@
 #include "Mycc.h"
 
+// Scope For Struct Tag
+typedef struct TagScope TagScope;
+struct TagScope
+{
+    TagScope *next;
+    char *name;
+    Type *ty;
+};
+
 VarList *locals;
 VarList *globals;
 VarList *scope; //そこまでに含まれている変数、localsは関数全体だが、scopeはint main(){int x; int y;}のint xの部分までだったらxまでとなる
+TagScope *tag_scope;
 
 // Find variable by name.
 Var *find_var(Token *tok)
@@ -37,6 +47,19 @@ Var *find_var(Token *tok)
         //memcmpは一致すれば０が返るので、!0で一致すればtrueを返す
         if (strlen(var->name) == tok->len && !memcmp(tok->str, var->name, tok->len))
             return var;
+    }
+
+    return NULL;
+}
+
+TagScope *find_tag(Token *tok)
+{
+    for (TagScope *sc = tag_scope; sc; sc = sc->next)
+    {
+        if (strlen(sc->name) == tok->len && !memcmp(tok->str, sc->name, tok->len))
+        {
+            return sc;
+        }
     }
 
     return NULL;
@@ -124,8 +147,11 @@ char *new_label()
 
 Function *function();
 Type *basetype();
+Type *struct_declaration();
+Member *struct_member();
 void global_var();
 Node *declaration();
+bool is_typename();
 Node *stmt();
 Node *expr();
 Node *assign();
@@ -178,19 +204,25 @@ Program *program()
     return prog;
 }
 
-// basetype = ("char" | int") "*"* //*が0個以上
+// basetype = ("char" | int" | struct-declaration) "*"* //*が0個以上
 Type *basetype()
 {
+    if (!is_typename(token))
+        error_tok(token, "typename expected");
+
     Type *ty;
 
     if (consume("char"))
     {
         ty = char_type();
     }
+    else if (consume("int"))
+    {
+        ty = int_type();
+    }
     else
     {
-        expect("int");
-        ty = int_type();
+        ty = struct_declaration();
     }
 
     while (consume("*"))
@@ -211,6 +243,89 @@ Type *read_type_suffix(Type *base)
     expect("]");
     base = read_type_suffix(base);
     return array_of(base, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
+}
+
+void push_tag_scope(Token *tok, Type *ty)
+{
+    TagScope *sc = calloc(1, sizeof(TagScope));
+    sc->next = tag_scope;
+    sc->name = strndup(tok->str, tok->len);
+    sc->ty = ty;
+    tag_scope = sc;
+}
+
+// struct-declaration = "struct" ident | "struct"  ident? "{" struct-member "}"
+// struct {}の{}までintみたいなtypeのうち　なのでここまでbasetypeでやって、その結果がVarに収容される
+Type *struct_declaration()
+{ //struct declarationはTY_STRUCTを返す
+
+    //Read struct members.
+    expect("struct");
+
+    // Read a struct tag.
+    Token *tag = consume_ident();
+    if (tag && !peek("{"))
+    {
+        //もしstruct identなら登録済みのを利用する
+        TagScope *sc = find_tag(tag);
+        if (!sc)
+            error_tok(tag, "unknown struct type"); //構造体宣言までに、tagを使うのであればTagを登録しておくこと
+        return sc->ty;
+    }
+
+    //ここからはident {...}ならTag付けしつつ利用、普通にstruct {...}なら普通に利用
+
+    expect("{");
+
+    // Read struct members;
+    Member head;
+    head.next = NULL;
+    Member *cur = &head;
+
+    while (!consume("}"))
+    {
+        cur->next = struct_member();
+        cur = cur->next;
+    }
+
+    Type *ty = calloc(1, sizeof(Type));
+    ty->kind = TY_STRUCT;
+    ty->members = head.next;
+
+    //Assign offsets within the struct to members.
+    int offset = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next)
+    {
+        offset = align_to(offset, mem->ty->align);
+        mem->offset = offset;
+        offset += size_of(mem->ty);
+
+        if (ty->align < mem->ty->align)
+        {
+            ty->align = mem->ty->align; //memというか大体Myccで使っているリンクドリストは新しく追加された奴から回していくので、例えばstruct { char x; int y;}だったらyからここにくることになる
+            //で、char->intでもint->charでも同じように構造体全体のsizeとしては16byteになってほしい
+            //このif説の中でalignが構造体の中で最大のtypeのalignとなる
+            //type.cのsize_ofの return align_to(end,ty->align);で効いてくる
+        }
+    }
+
+    // Register the struct type if a name was given.
+    if (tag)
+        push_tag_scope(tag, ty);
+
+    return ty;
+}
+
+// struct-member = basetype ident ( "[" num "]" )* ";"
+
+Member *struct_member()
+{
+    Member *mem = calloc(1, sizeof(Member));
+    mem->ty = basetype();
+    mem->name = expect_ident();
+    mem->ty = read_type_suffix(mem->ty);
+    expect(";");
+    return mem;
 }
 
 VarList *read_func_param()
@@ -286,14 +401,23 @@ void global_var()
 }
 
 // declaration = basetype ident  ("[" num "]")*  ("=" expr) ";"
+//              | basetype ";"
 Node *declaration()
 {
     Token *tok = token;
     Type *ty = basetype();
 
+    if (consume(";"))
+    {
+        //basetype()の中にstruct\declarationも含まれているので,ここのifでは、
+        // struct x {...};みたいなtag付けを処理する
+        //int ;見たいのは絶対ないけどstructについてはこういう宣言もあるので変わってる
+        return new_node(ND_NULL, tok);
+    }
+
     char *name = expect_ident();
-    ty = read_type_suffix(ty); //suffixの分tyを変更、あるいはそのまま
-    Var *var = push_var(name, ty, true);
+    ty = read_type_suffix(ty);           //suffixの分tyを変更、あるいはそのまま
+    Var *var = push_var(name, ty, true); //ここでstructTypeもきちんと入る
 
     if (consume(";"))
     {
@@ -316,7 +440,7 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("char") || peek("int");
+    return peek("char") || peek("int") || peek("struct");
 }
 
 // stmt = "return" expr ";"
@@ -397,7 +521,8 @@ Node *stmt()
         Node *cur = &head;
 
         //NodeBlockにscopeを追加,ここのscopeの生存期間はBlockの中でだけ
-        VarList *sc = scope;
+        VarList *sc1 = scope;
+        TagScope *sc2 = tag_scope;
 
         while (!consume("}"))
         {
@@ -405,7 +530,8 @@ Node *stmt()
             cur = cur->next;
         }
 
-        scope = sc; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
+        scope = sc1; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
+        tag_scope = sc2;
 
         Node *node = new_node(ND_BLOCK, tok);
         node->body = head.next;
@@ -535,21 +661,46 @@ Node *unary()
     return postfix();
 }
 
-// postfix = primary ( "[" expr "]" )*
+// postfix = primary ( "[" expr "]"  |  "." ident  | "->" ident)*
 Node *postfix()
 {
     Node *node = primary();
     Token *tok;
 
-    while (tok = consume("["))
+    for (;;)
     {
-        //x[y] is short for *(x+y)
-        Node *exp = new_binary(ND_ADD, node, expr(), tok);
-        expect("]");
-        node = new_unary(ND_DEREF, exp, tok);
-    }
+        if (tok = consume("["))
+        {
+            //x[y] is short for *(x+y)
+            Node *exp = new_binary(ND_ADD, node, expr(), tok);
+            expect("]");
+            node = new_unary(ND_DEREF, exp, tok);
 
-    return node;
+            continue;
+        }
+
+        if (tok = consume("."))
+        {
+            node = new_unary(ND_MEMBER, node, tok);
+            node->member_name = expect_ident(); //流れとしてはparseで構造体の宣言、memberのoffsetを計算、そのあとtype.cで . で実際に呼ぶmember_nameからmember_offsetを入手
+
+            continue;
+        }
+
+        if (tok = consume("->"))
+        {
+            // x->y is short for (*x).y
+            // . と　->　は用法が違って, ~.aは直接構造体から、 ~ -> aは構造体の先頭アドレスを格納したポインタからのアクセス,なので->はポインタを介したアクセス
+            //なので struct x {int a;}; *y  = &xで y->aとしたとき
+            //yは上でprimary()として計算され、それがDEREFに入る　
+            node = new_unary(ND_DEREF, node, tok);
+            node = new_unary(ND_MEMBER, node, tok);
+            node->member_name = expect_ident();
+            continue;
+        }
+
+        return node;
+    }
 }
 
 //func-args = "(" (assign ("," assign)* )? ")"
@@ -576,7 +727,8 @@ Node *func_args()
 //Statement expression is a GNU C extensionらしい
 Node *stmt_expr(Token *tok)
 {
-    VarList *sc = scope;
+    VarList *sc1 = scope;
+    TagScope *sc2 = tag_scope;
 
     Node *node = new_node(ND_STMT_EXPR, tok);
     node->body = stmt();
@@ -590,7 +742,8 @@ Node *stmt_expr(Token *tok)
 
     expect(")");
 
-    scope = sc;
+    scope = sc1;
+    tag_scope = sc2;
     //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
 
     if (cur->kind != ND_EXPR_STMT)

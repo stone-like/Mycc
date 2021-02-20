@@ -8,7 +8,9 @@ Mycc: $(OBJS)
 $(OBJS): Mycc.h
 
 test: Mycc
-	./test.sh
+	./Mycc tests > tmp.s
+	gcc -static -o tmp tmp.s
+	./tmp
 
 clean:
 	rm -f Mycc *.o *~ tmp*

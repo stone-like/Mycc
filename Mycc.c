@@ -31,11 +31,6 @@ char *read_file(char *path)
     return buf;
 }
 
-int align_to(int n, int align)
-{
-    return (n + align - 1) & ~(align - 1);
-}
-
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -60,10 +55,17 @@ int main(int argc, char **argv)
         for (VarList *vl = fn->locals; vl; vl = vl->next)
         {
             Var *var = vl->var;
+            offset = align_to(offset, var->ty->align); //この行を追加することでローカル変数レベルのalignが可能になる
+            //構造体の時と同じく、新しいローカル変数から回るので例えば
+            //int x; char y;だと
+            // char offset (align(0,1)=0 + sizeof char =1) = 1
+            // int  offset (align(1,8)=8 + sizeof int = 8) = 16
+            //これはalign_toがなければできない
             offset += size_of(var->ty);
             vl->var->offset = offset;
         }
         fn->stack_size = align_to(offset, 8); //最後のスタックのアドレスをアラインしただけでローカル変数レベルではalignしていない,スタックにプッシュするのも8byte単位
+        //ローカル変数レベルでもやってるけど、例えばcharのみだと8byte境界にならないので、stack_sizeでのalignもいるっぽい？
     }
 
     codegen(prog);

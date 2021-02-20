@@ -1,32 +1,38 @@
 #include "Mycc.h"
 
-Type *new_type(TypeKind kind)
+int align_to(int n, int align)
+{
+    return (n + align - 1) & ~(align - 1);
+}
+
+Type *new_type(TypeKind kind, int align)
 {
     Type *ty = calloc(1, sizeof(Type));
     ty->kind = kind;
+    ty->align = align;
     return ty;
 }
 
 Type *char_type()
 {
-    return new_type(TY_CHAR);
+    return new_type(TY_CHAR, 1);
 }
 
 Type *int_type()
 {
-    return new_type(TY_INT);
+    return new_type(TY_INT, 8);
 }
 
 Type *pointer_to(Type *base)
 {
-    Type *ty = new_type(TY_PTR);
+    Type *ty = new_type(TY_PTR, 8);
     ty->base = base;
     return ty;
 }
 
 Type *array_of(Type *base, int size)
 {
-    Type *ty = new_type(TY_ARRAY);
+    Type *ty = new_type(TY_ARRAY, base->align);
     ty->base = base;
     ty->array_size = size;
     return ty;
@@ -41,10 +47,28 @@ int size_of(Type *ty)
     case TY_INT:
     case TY_PTR:
         return 8;
-    default:
-        assert(ty->kind == TY_ARRAY);
+    case TY_ARRAY:
         return size_of(ty->base) * ty->array_size; //再帰でsizeを獲得
+    default:
+        assert(ty->kind == TY_STRUCT);
+        Member *mem = ty->members;
+        while (mem->next)
+            mem = mem->next;
+        int end = mem->offset + size_of(mem->ty);
+        return align_to(end, ty->align); //構造体の中で最大のサイズのalignとなる
+        //構造体レベルのalign
     }
+}
+
+Member *find_member(Type *ty, char *name)
+{
+    assert(ty->kind == TY_STRUCT);
+    for (Member *mem = ty->members; mem; mem = mem->next)
+    {
+        if (!strcmp(mem->name, name))
+            return mem; //strcmpは一致すれば0を返すので!strcmpなら一致したことになる
+    }
+    return NULL;
 }
 
 void visit(Node *node)
@@ -99,6 +123,29 @@ void visit(Node *node)
     case ND_ASSIGN:
         node->ty = node->lhs->ty;
         return;
+    case ND_MEMBER:
+    {
+        // . からはND_MEMBERが作られる
+        // x.memみたいにきて、. のlhsがvar TY_STRUCTのx <-findVarでTY_STRUCTの変数xを持ってくる
+        // .のmember_nameがmem
+        if (node->lhs->ty->kind != TY_STRUCT)
+        {
+            error_tok(node->tok, "not a struct");
+        }
+
+        node->member = find_member(node->lhs->ty, node->member_name); //ここでx.memみたいなやつで指定の構造体のメンバーが指定される,offsetはparseで計算してある
+        //あくまで構造体もただの変数でしかなく、普通の変数と扱いは同じ（Var(TY_STRUCT)）という形で、オフセットの取得方法がmemberを使っているのでちょっと特殊なだけ
+        if (!node->member)
+        {
+            error_tok(node->tok, "specified member does not exist");
+        }
+
+        //.のタイプは指定したメンバーのタイプとなる
+
+        node->ty = node->member->ty;
+        return;
+    }
+
     case ND_ADDR: //(&x+1)の場合&xはND_ADDRなのでTY_PTRになるので&x add 1 はadd TY_PTRになる
         if (node->lhs->ty->kind == TY_ARRAY)
         {
