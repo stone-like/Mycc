@@ -1,7 +1,9 @@
 #include "Mycc.h"
 
-char *argreg1[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"}; //それぞれ下記の下位8byte？
-char *argreg8[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"}; //関数の引数リスト、現在6引数まで
+char *argreg1[] = {"dil", "sil", "dl", "cl", "r8b", "r9b"}; //それぞれ下記の下位8bit = 1byte？
+char *argreg2[] = {"di", "si", "dx", "cx", "r8w", "r9w"};
+char *argreg4[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"}; //下位32bit = 4byte
+char *argreg8[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};   //関数の引数リスト、現在6引数まで
 
 int labelseq = 0; //複数if文とカあるときにlabelがかぶらないように
 char *funcname;
@@ -62,12 +64,23 @@ void load(Type *ty)
     //loadの直前でアドレスがスタックトップにあるはずなので
     printf("   pop rax\n");
 
-    if (size_of(ty) == 1)
+    int sz = size_of(ty);
+
+    if (sz == 1)
     {
         printf("   movsx rax,byte ptr [rax]\n");
     }
+    else if (sz == 2)
+    {
+        printf("   movsx rax, word ptr [rax]\n"); //16bitを64bitに符合拡張して転送
+    }
+    else if (sz == 4)
+    {
+        printf("   movsxd rax, dword ptr [rax]\n"); //32bitを64bitに符合拡張して転送
+    }
     else
     {
+        assert(sz == 8);
         printf("   mov rax, [rax]\n");
     }
 
@@ -80,12 +93,23 @@ void store(Type *ty)
     printf("   pop rdi\n");
     printf("   pop rax\n");
 
-    if (size_of(ty) == 1)
+    int sz = size_of(ty);
+
+    if (sz == 1)
     {
         printf("   mov [rax], dil\n");
     }
+    else if (sz == 2)
+    {
+        printf("   mov [rax], di\n");
+    }
+    else if (sz == 4)
+    {
+        printf("   mov [rax], edi\n");
+    }
     else
     {
+        assert(sz == 8);
         printf("   mov [rax], rdi\n");
     }
 
@@ -342,6 +366,14 @@ void load_arg(Var *var, int idx)
     if (sz == 1)
     {
         printf("   mov [rbp-%d], %s\n", var->offset, argreg1[idx]);
+    }
+    else if (sz == 2)
+    {
+        printf("   mov [rbp-%d], %s\n", var->offset, argreg2[idx]);
+    }
+    else if (sz == 4)
+    {
+        printf("   mov [rbp-%d], %s\n", var->offset, argreg4[idx]);
     }
     else
     {

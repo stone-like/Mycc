@@ -221,7 +221,8 @@ Program *program()
     return prog;
 }
 
-// basetype = ("char" | int" | struct-declaration | typedef-name ) "*"* //*が0個以上
+// basetype = type "*"* //*が0個以上
+// type = "char" | int" | struct-declaration | typedef-name
 //basetypeではtypedefで宣言された typedef int xのxも処理する
 //このときのxはただの変数ではあるが、VarScopeのtypedefにType構造体でtyがINTのやつ(stmt()のtypedefの処理の時にbasetype()から作ったやつ)が入っている
 
@@ -236,9 +237,17 @@ Type *basetype()
     {
         ty = char_type();
     }
+    else if (consume("short"))
+    {
+        ty = short_type();
+    }
     else if (consume("int"))
     {
         ty = int_type();
+    }
+    else if (consume("long"))
+    {
+        ty = long_type();
     }
     else if (consume("struct"))
     {
@@ -466,7 +475,7 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("char") || peek("int") || peek("struct") || find_typedef(token);
+    return peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || find_typedef(token);
 }
 
 // stmt = "return" expr ";"
