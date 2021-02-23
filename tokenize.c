@@ -117,11 +117,11 @@ void expect(char *op)
     token = token->next;
 }
 
-int expect_number()
+long expect_number()
 {
     if (token->kind != TK_NUM)
         error_tok(token, "数ではありません");
-    int val = token->val;
+    long val = token->val;
     token = token->next;
     return val;
 }
@@ -216,6 +216,33 @@ char get_escape_char(char c)
     default:
         return c;
     }
+}
+
+//charLiteralは数字扱いっぽい
+Token *read_char_literal(Token *cur, char *start)
+{
+    char *p = start + 1;
+    if (*p == '\0')
+        error_at(start, "unclosed char literal");
+
+    char c;
+    if (*p == '\\')
+    {
+        p++;
+        c = get_escape_char(*p++);
+    }
+    else
+    {
+        c = *p++;
+    }
+
+    if (*p != '\'')
+        error_at(start, "char literal too long");
+    p++;
+
+    Token *tok = new_token(TK_NUM, cur, start, p - start);
+    tok->val = c;
+    return tok;
 }
 
 Token *read_string_literal(Token *cur, char *start)
@@ -334,6 +361,14 @@ Token *tokenize()
         if (*p == '"')
         {
             cur = read_string_literal(cur, p);
+            p += cur->len;
+            continue;
+        }
+
+        // Character literal
+        if (*p == '\'')
+        {
+            cur = read_char_literal(cur, p);
             p += cur->len;
             continue;
         }

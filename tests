@@ -11,11 +11,11 @@
 int g1;
 int g2[4];
 
-int assert(int expected, int actual, char *code) {
+int assert(long expected, long actual, char *code) {
   if (expected == actual) {
-    printf("%s => %d\n", code, actual);
+    printf("%s => %ld\n", code, actual);
   } else {
-    printf("%s => %d expected but got %d\n", code, expected, actual);
+    printf("%s => %ld expected but got %ld\n", code, expected, actual);
     exit(1);
   }
 }
@@ -63,6 +63,9 @@ int fib(int x) {
     return 1;
   return fib(x-1) + fib(x-2);
 }
+
+char char_fn() { return 257; }//charと返り値を宣言しているのに、実際はintを返している
+//Myccの場合はErrorを返すのではなくtruncateする
 
 int main() {
   assert(8, ({ int a=3; int z=5; a+z; }), "int a=3; int z=5; a+z;");
@@ -285,6 +288,50 @@ assert(1, ({ typedef int t; t x=1; x; }), "typedef int t; t x=1; x;");
   assert(0, ({ _Bool x=0; x; }), "_Bool x=0; x;");
   assert(1, ({ _Bool x=1; x; }), "_Bool x=1; x;");
   assert(1, ({ _Bool x=2; x; }), "_Bool x=2; x;");
+
+  assert(1, ({ char x; sizeof(x); }), "char x; sizeof(x);");
+  assert(2, ({ short int x; sizeof(x); }), "short int x; sizeof(x);");
+  assert(2, ({ int short x; sizeof(x); }), "int short x; sizeof(x);");
+  assert(4, ({ int x; sizeof(x); }), "int x; sizeof(x);");
+  assert(4, ({ typedef t; t x; sizeof(x); }), "typedef t; t x; sizeof(x);");
+  assert(8, ({ long int x; sizeof(x); }), "long int x; sizeof(x);");
+  assert(8, ({ int long x; sizeof(x); }), "int long x; sizeof(x);");
+
+  assert(1, sizeof(char), "sizeof(char)");
+  assert(2, sizeof(short), "sizeof(short)");
+  assert(2, sizeof(short int), "sizeof(short int)");
+  assert(2, sizeof(int short), "sizeof(int short)");
+  assert(4, sizeof(int), "sizeof(int)");
+  assert(8, sizeof(long), "sizeof(long)");
+  assert(8, sizeof(long int), "sizeof(long int)");
+  assert(8, sizeof(long int), "sizeof(long int)");
+  assert(8, sizeof(char *), "sizeof(char *)");
+  assert(8, sizeof(int *), "sizeof(int *)");
+  assert(8, sizeof(long *), "sizeof(long *)");
+  assert(8, sizeof(int **), "sizeof(int **)");
+  assert(8, sizeof(int(*)[4]), "sizeof(int(*)[4])");
+  assert(32, sizeof(int*[4]), "sizeof(int(*)[4])");
+  assert(16, sizeof(int[4]), "sizeof(int[4])");
+  assert(48, sizeof(int[3][4]), "sizeof(int[3][4])");
+
+   assert(4, sizeof(0), "sizeof(0)");
+  assert(4294967297, 4294967297, "4294967297");
+  assert(8, sizeof(4294967297), "sizeof(4294967297)");
+
+  assert(131585, (int)8590066177, "(int)8590066177");
+  assert(513, (short)8590066177, "(short)8590066177");
+  assert(1, (char)8590066177, "(char)8590066177");
+  assert(1, (_Bool)1, "(_Bool)1");
+  assert(1, (_Bool)2, "(_Bool)2");
+  assert(0, (_Bool)(char)256, "(_Bool)(char)256");
+  assert(1, (long)1, "(long)1");
+  assert(0, (long)&*(int *)0, "(long)&*(int *)0");
+  assert(5, ({ int x=5; long y=(long)&x; *(int*)y; }), "int x=5; long y=(long)&x; *(int*)y");
+
+  assert(97, 'a', "'a'");
+  assert(10, '\n', "\'\\n\'");
+  
+  assert(1, char_fn(), "char_fn()");
   
   printf("OK\n");
   return 0;

@@ -29,7 +29,7 @@ struct Token
 {
     TokenKind kind; // Token kind
     Token *next;    // Next token
-    int val;        // If kind is TK_NUM, its value
+    long val;       // If kind is TK_NUM, its value
     char *str;      // Token string
     int len;        // Token length
 
@@ -46,7 +46,7 @@ char *strndup(char *p, int len);
 Token *consume_ident();
 char *expect_ident();
 void expect(char *op);
-int expect_number();
+long expect_number();
 bool at_eof();
 Token *new_token(TokenKind kind, Token *cur, char *str, int len);
 Token *tokenize();
@@ -108,6 +108,7 @@ typedef enum
     ND_STMT_EXPR, // Statement Expression 文を式として扱える、例えばreturn { int x=2; x;}とかできる
     ND_VAR,       // variable
     ND_NUM,       // Integer
+    ND_CAST,      // Type cast
     ND_NULL,      //EmptyStatement
 } NodeKind;
 
@@ -146,7 +147,7 @@ struct Node
     Node *args;
 
     Var *var; //Used if kind == ND_VAR
-    int val;  // Used if kind == ND_NUM
+    long val; // Used if kind == ND_NUM
 };
 
 typedef struct Function Function;
@@ -188,6 +189,7 @@ typedef enum
 struct Type
 {
     TypeKind kind;
+    bool is_typedef; //typedef
     int align;       //alignment
     Type *base;      // pointer or array
     int array_size;  // for Array

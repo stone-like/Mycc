@@ -124,6 +124,33 @@ void store(Type *ty)
     printf("   push rdi\n");
 }
 
+void truncate(Type *ty)
+{
+    printf("   pop rax\n");
+
+    if (ty->kind == TY_BOOL)
+    {
+        printf("   cmp rax,0\n");
+        printf("   setne al\n");
+    }
+
+    int sz = size_of(ty);
+
+    if (sz == 1)
+    {
+        printf("  movsx rax, al\n");
+    }
+    else if (sz == 2)
+    {
+        printf("  movsx rax, ax\n");
+    }
+    else if (sz == 4)
+    {
+        printf("  movsxd rax, eax\n");
+    }
+    printf("  push rax\n");
+}
+
 void gen(Node *node)
 {
 
@@ -132,10 +159,19 @@ void gen(Node *node)
     case ND_NULL:
         return; //初期化式のダミー用？
     case ND_NUM:
-        printf("   push %d\n", node->val);
+        if (node->val == (int)node->val)
+        {
+            printf("  push %ld\n", node->val);
+        }
+        else
+        {
+            printf("  movabs rax, %ld\n", node->val);
+            printf("  push rax\n");
+        }
         return;
-        // 式文なので、結果を捨てるという意味でadd rsp,8している(genの後は結果がスタックにpushされているので)
+
     case ND_EXPR_STMT:
+        // 式文なので、結果を捨てるという意味でadd rsp,8している(genの後は結果がスタックにpushされているので)
         gen(node->lhs);
         printf("   add rsp, 8\n");
         return;
@@ -266,6 +302,8 @@ void gen(Node *node)
         printf("  add rsp, 8\n");               //一応戻しておく、また関数呼び出しでずれていたらその都度8byte引くことになる
         printf(".Lend%d:\n", seq);
         printf("   push rax\n"); //返り値がraxに入っているので
+
+        truncate(node->ty);
         return;
     }
 
@@ -273,6 +311,10 @@ void gen(Node *node)
         gen(node->lhs); //関数のretとreturnはあまり関係がない、retではraxに積むことはしないので、returnでraxに返り値を積む
         printf("   pop rax\n");
         printf("   jmp .Lreturn.%s\n", funcname);
+        return;
+    case ND_CAST:
+        gen(node->lhs);
+        truncate(node->ty);
         return;
     }
 

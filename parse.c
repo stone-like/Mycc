@@ -85,7 +85,7 @@ Node *new_unary(NodeKind kind, Node *expr, Token *tok)
     return node;
 }
 
-Node *new_num(int val, Token *tok)
+Node *new_num(long val, Token *tok)
 {
     Node *node = new_node(ND_NUM, tok);
     node->val = val;
@@ -166,7 +166,9 @@ Function *function();
 // Type *basetype();
 Type *type_specifier();
 Type *declarator(Type *ty, char **name);
+Type *abstract_declarator(Type *ty);
 Type *type_suffix(Type *ty);
+Type *type_name();
 
 Type *struct_declaration();
 Member *struct_member();
@@ -180,6 +182,7 @@ Node *equality();
 Node *relational();
 Node *add();
 Node *mul();
+Node *cast();
 Node *unary();
 Node *postfix();
 Node *primary();
@@ -229,7 +232,14 @@ Program *program()
 }
 
 // typespecifier = builtin-type | struct-declaration | typedef-name
-// builtin-type = "void" | "char" | "short" | "int" | "long"
+
+// builtin-type   = "void"
+//                | "_Bool"
+//                | "char"
+//                | "short" | "short" "int" | "int" "short"
+//                | "int"
+//                | "long" | "long" "int" | "int" "long"
+//
 //basetypeではtypedefで宣言された typedef int xのxも処理する
 //このときのxはただの変数ではあるが、VarScopeのtypedefにType構造体でtyがINTのやつ(stmt()のtypedefの処理の時にbasetype()から作ったやつ)が入っている
 
@@ -238,38 +248,107 @@ Type *type_specifier()
     if (!is_typename(token))
         error_tok(token, "typename expected");
 
-    if (consume("void"))
+    Type *ty = NULL;
+    enum
     {
-        return void_type();
-    }
-    else if (consume("_Bool"))
+        VOID = 1 << 1,
+        BOOL = 1 << 3,
+        CHAR = 1 << 5,
+        SHORT = 1 << 7,
+        INT = 1 << 9,
+        LONG = 1 << 11,
+    };
+
+    int base_type = 0;
+    Type *user_type = NULL;
+
+    bool is_typedef = false;
+
+    for (;;)
     {
-        return bool_type();
+        //Read one Token at a time.
+        Token *tok = token;
+        if (consume("typedef"))
+        { //typedefで作られた変数もここで扱うが、typedefの作成自体もここでする
+            //ただここでは変数を作るだけ、変数をScopeに入れていない
+            is_typedef = true;
+        }
+        else if (consume("void"))
+        {
+            base_type += VOID;
+        }
+        else if (consume("_Bool"))
+        {
+            base_type += BOOL;
+        }
+        else if (consume("char"))
+        {
+            base_type += CHAR;
+        }
+        else if (consume("short"))
+        {
+            base_type += SHORT;
+        }
+        else if (consume("int"))
+        {
+            base_type += INT;
+        }
+        else if (consume("long"))
+        {
+            base_type += LONG;
+        } //user_typeはbase_type以外のやつ,breakしているのはbase_type+user_type,user_type+user_typeの組み合わせをなくすため
+        else if (peek("struct"))
+        {
+            if (base_type || user_type)
+                break;
+            user_type = struct_declaration();
+        }
+        else
+        {
+            if (base_type || user_type)
+                break;
+            Type *ty = find_typedef(token);
+            if (!ty)
+                break;
+            token = token->next;
+            user_type = ty;
+        }
+
+        switch (base_type)
+        {
+        //enumを使って型の足し合わせをbitで表現している
+        case VOID:
+            ty = void_type();
+            break;
+        case BOOL:
+            ty = bool_type();
+            break;
+        case CHAR:
+            ty = char_type();
+            break;
+        case SHORT:
+        case SHORT + INT:
+            ty = short_type();
+            break;
+        case INT:
+            ty = int_type();
+            break;
+        case LONG:
+        case LONG + INT:
+            ty = long_type();
+            break;
+        case 0:
+            // If there's no type specifier, it becomes int.
+            // For example, `typedef x` defines x as an alias for int.
+            ty = user_type ? user_type : int_type();
+            break;
+        default:
+            error_tok(tok, "invalid type");
+        }
     }
-    else if (consume("char"))
-    {
-        return char_type();
-    }
-    else if (consume("short"))
-    {
-        return short_type();
-    }
-    else if (consume("int"))
-    {
-        return int_type();
-    }
-    else if (consume("long"))
-    {
-        return long_type();
-    }
-    else if (consume("struct"))
-    {
-        return struct_declaration();
-    }
-    else
-    {
-        return find_var(consume_ident())->type_def; //こういうAlias系が結構面白い
-    }
+
+    ty->is_typedef = is_typedef;
+    return ty;
 }
 
 // declarator = "*"* ( "(" declaration ")"  | ident ) type-suffix
@@ -300,6 +379,26 @@ Type *declarator(Type *ty, char **name)
     return type_suffix(ty);
 }
 
+// abstract-declarator = "*"* ( "(" abstract-declarator ")" )? type-suffix
+Type *abstract_declarator(Type *ty)
+{
+    while (consume("*"))
+    {
+        ty = pointer_to(ty);
+    }
+
+    if (consume("("))
+    {
+        Type *placeholder = calloc(1, sizeof(Type));
+        Type *new_ty = abstract_declarator(placeholder);
+        expect(")");
+        *placeholder = *type_suffix(ty);
+        return new_ty;
+    }
+
+    return type_suffix(ty);
+}
+
 // type-suffix = ( "[" num "]" type-suffix)?
 Type *type_suffix(Type *ty)
 {
@@ -311,6 +410,14 @@ Type *type_suffix(Type *ty)
 
     ty = type_suffix(ty);
     return array_of(ty, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
+}
+
+// type-name = type-specifier abstract-declarator type-suffix
+Type *type_name()
+{
+    Type *ty = type_specifier();
+    ty = abstract_declarator(ty);
+    return type_suffix(ty);
 }
 
 void push_tag_scope(Token *tok, Type *ty)
@@ -328,7 +435,7 @@ Type *struct_declaration()
 { //struct declarationはTY_STRUCTを返す
 
     //Read struct members.
-    // expect("struct");  ??
+    expect("struct");
 
     // Read a struct tag.
     Token *tag = consume_ident();
@@ -504,6 +611,15 @@ Node *declaration()
     ty = declarator(ty, &name);
     ty = type_suffix(ty); //suffixの分tyを変更、あるいはそのまま
 
+    if (ty->is_typedef)
+    { //typedefの時は今まではキーワードで扱っていたがtypedefも型と同じ場所で処理することにした(以前はstmtで処理していた)
+        expect(";");
+        ty->is_typedef = false;          //ここでis_typedefをfalseにしてただの変数に戻す,なぜ戻す？
+        push_scope(name)->type_def = ty; //type_sepecifierでtypedefの宣言かどうか確認して、ここで登録
+
+        return new_node(ND_NULL, tok);
+    }
+
     if (ty->kind == TY_VOID)
     {
         error_tok(tok, "variable declared void");
@@ -532,7 +648,7 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("void") || peek("_Bool") || peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || find_typedef(token);
+    return peek("void") || peek("_Bool") || peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || peek("typedef") || find_typedef(token);
 }
 
 // stmt = "return" expr ";"
@@ -540,7 +656,6 @@ bool is_typename()
 //        | "while" "(" expr ")" stmt
 //        | "for" "(" expr? ";" expr? ";" expr? ")" stmt
 //        | "{" stmt* "}"
-//        | "typedef" type-specifier declarator type-suffix  ";"
 //        | declaration
 //        | expr ";"
 
@@ -631,20 +746,6 @@ Node *stmt()
         return node;
     }
 
-    if (tok = consume("typedef"))
-    {
-        Type *ty = type_specifier();
-        char *name = NULL;
-        ty = declarator(ty, &name);
-        ty = type_suffix(ty);
-
-        expect(";");
-
-        push_scope(name)->type_def = ty;
-        //ここで "name"を読み取ったタイプとして扱う、ここでの役割はこれだけ、codegenではもう必要ないのでND_NULL
-        return new_node(ND_NULL, tok);
-    }
-
     if (is_typename())
         return declaration();
 
@@ -727,42 +828,64 @@ Node *add()
     }
 }
 
-//mul = unary ("*" unary | "/" unary)*
+//mul = cast ("*" cast | "/" cast)*
 Node *mul()
 {
-    Node *node = unary();
+    Node *node = cast();
     Token *tok;
     for (;;)
     {
         if (tok = consume("*"))
-            node = new_binary(ND_MUL, node, unary(), tok);
+            node = new_binary(ND_MUL, node, cast(), tok);
         else if (tok = consume("/"))
-            node = new_binary(ND_DIV, node, unary(), tok);
+            node = new_binary(ND_DIV, node, cast(), tok);
         else
             return node;
     }
 }
 
-//unary = ("+" | "-" | "*" | "&")? unary | postfix
+// cast = "(" type-name ")" cast | unary
+Node *cast()
+{
+    Token *tok = token;
+
+    if (consume("("))
+    {
+        //typeCastの場合
+        if (is_typename())
+        {
+            Type *ty = type_name();
+            expect(")");
+            Node *node = new_unary(ND_CAST, cast(), tok);
+            node->ty = ty; //ND_CASTのタイプはcastするtype
+            return node;
+        }
+        token = tok; //typenameで無い場合tokenを戻す
+    }
+
+    return unary();
+}
+
+//unary = ("+" | "-" | "*" | "&")? cast | postfix
 Node *unary()
 {
     Token *tok;
     if (tok = consume("+"))
     {
-        return unary();
+        return cast();
     }
     if (tok = consume("-"))
     {
         //0-?の計算をすることで-を作る
-        return new_binary(ND_SUB, new_num(0, tok), unary(), tok);
+        return new_binary(ND_SUB, new_num(0, tok), cast(), tok);
     }
     if (tok = consume("&"))
     {
-        return new_unary(ND_ADDR, unary(), tok);
+        return new_unary(ND_ADDR, cast(), tok);
     }
     if (tok = consume("*"))
     {
-        return new_unary(ND_DEREF, unary(), tok);
+        return new_unary(ND_DEREF, cast(), tok);
     }
 
     return postfix();
@@ -868,6 +991,7 @@ Node *stmt_expr(Token *tok)
 
 //primary = "(" "{" stmt-expr-tail "}" ")"
 //           |  "(" expr ")" | "sizeof" unary | ident func-args? | str | num
+//           |  "sizeof" "(" type-name ")"
 
 Node *primary()
 {
@@ -887,7 +1011,22 @@ Node *primary()
     }
 
     if (tok = consume("sizeof"))
+    {
+        //sizeof exprでなくsizeof typeの場合
+        if (consume("("))
+        {
+            if (is_typename())
+            {
+                Type *ty = type_name();
+                expect(")");
+                return new_num(size_of(ty), tok);
+            }
+
+            token = tok->next;
+        }
         return new_unary(ND_SIZEOF, unary(), tok);
+    }
+
     if (tok = consume_ident())
     {
         //identのあとに"("が来ていれば関数呼び出し
