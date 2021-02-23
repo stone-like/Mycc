@@ -13,6 +13,16 @@ Type *new_type(TypeKind kind, int align)
     return ty;
 }
 
+Type *void_type()
+{
+    return new_type(TY_VOID, 1);
+}
+
+Type *bool_type()
+{
+    return new_type(TY_BOOL, 1);
+}
+
 Type *char_type()
 {
     return new_type(TY_CHAR, 1);
@@ -33,6 +43,13 @@ Type *long_type()
     return new_type(TY_LONG, 8);
 }
 
+Type *func_type(Type *return_ty)
+{
+    Type *ty = new_type(TY_FUNC, 1);
+    ty->return_ty = return_ty;
+    return ty;
+}
+
 Type *pointer_to(Type *base)
 {
     Type *ty = new_type(TY_PTR, 8);
@@ -50,8 +67,11 @@ Type *array_of(Type *base, int size)
 
 int size_of(Type *ty)
 {
+    assert(ty->kind != TY_VOID);
+
     switch (ty->kind)
     {
+    case TY_BOOL:
     case TY_CHAR:
         return 1;
     case TY_SHORT:
@@ -111,7 +131,6 @@ void visit(Node *node)
     case ND_NE:
     case ND_LT:
     case ND_LE:
-    case ND_FUNCALL:
     case ND_NUM:
         node->ty = int_type();
         return;
@@ -175,6 +194,11 @@ void visit(Node *node)
                                   //* の後には必ず何らかの形でアドレスが来なくてはいけない
             error_tok(node->tok, "invalid pointer dereference");
         node->ty = node->lhs->ty->base;
+
+        if (node->ty->kind == TY_VOID)
+        {
+            error_tok(node->tok, "dereferenceinf a void pointer");
+        }
 
         return;
     case ND_SIZEOF: //ノードタイプをSIZEOFからNUMへ変化させる

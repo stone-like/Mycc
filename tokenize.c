@@ -169,7 +169,7 @@ bool is_alnum(char c)
 char *starts_with_reserved(char *p)
 {
     //Keyword
-    static char *kw[] = {"return", "if", "else", "while", "for", "int", "sizeof", "char", "struct", "typedef", "short", "long"};
+    static char *kw[] = {"return", "if", "else", "while", "for", "int", "sizeof", "char", "struct", "typedef", "short", "long", "void", "_Bool"};
 
     //sizeof(kw)/sizeof(*kw)は配列のlen
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

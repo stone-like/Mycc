@@ -128,8 +128,8 @@ Var *push_var(char *name, Type *ty, bool is_local)
         vl->next = locals;
         locals = vl;
     }
-    else
-    {
+    else if (ty->kind != TY_FUNC)
+    { //TY_FUNCの変数はscopeに追加するだけ
         vl->next = globals;
         globals = vl;
     }
@@ -163,7 +163,11 @@ char *new_label()
 }
 
 Function *function();
-Type *basetype();
+// Type *basetype();
+Type *type_specifier();
+Type *declarator(Type *ty, char **name);
+Type *type_suffix(Type *ty);
+
 Type *struct_declaration();
 Member *struct_member();
 void global_var();
@@ -185,11 +189,14 @@ Node *primary();
 bool is_function()
 {
     Token *tok = token;
-    basetype();
 
-    bool is_func = consume_ident() && consume("(");
+    Type *ty = type_specifier();
+    char *name = NULL;
+    declarator(ty, &name);
+    bool isfunc = name && consume("(");
+
     token = tok; //読んだ分戻してあげる
-    return is_func;
+    return isfunc;
 }
 
 // program = (gloval-var | function)*
@@ -221,63 +228,89 @@ Program *program()
     return prog;
 }
 
-// basetype = type "*"* //*が0個以上
-// type = "char" | int" | struct-declaration | typedef-name
+// typespecifier = builtin-type | struct-declaration | typedef-name
+// builtin-type = "void" | "char" | "short" | "int" | "long"
 //basetypeではtypedefで宣言された typedef int xのxも処理する
 //このときのxはただの変数ではあるが、VarScopeのtypedefにType構造体でtyがINTのやつ(stmt()のtypedefの処理の時にbasetype()から作ったやつ)が入っている
 
-Type *basetype()
+Type *type_specifier()
 {
     if (!is_typename(token))
         error_tok(token, "typename expected");
 
-    Type *ty;
-
-    if (consume("char"))
+    if (consume("void"))
     {
-        ty = char_type();
+        return void_type();
+    }
+    else if (consume("_Bool"))
+    {
+        return bool_type();
+    }
+    else if (consume("char"))
+    {
+        return char_type();
     }
     else if (consume("short"))
     {
-        ty = short_type();
+        return short_type();
     }
     else if (consume("int"))
     {
-        ty = int_type();
+        return int_type();
     }
     else if (consume("long"))
     {
-        ty = long_type();
+        return long_type();
     }
     else if (consume("struct"))
     {
-        ty = struct_declaration();
+        return struct_declaration();
     }
     else
     {
-        ty = find_var(consume_ident())->type_def; //こういうAlias系が結構面白い
+        return find_var(consume_ident())->type_def; //こういうAlias系が結構面白い
     }
+}
 
-    assert(ty);
+// declarator = "*"* ( "(" declaration ")"  | ident ) type-suffix
+Type *declarator(Type *ty, char **name)
+{
 
     while (consume("*"))
+    {
         ty = pointer_to(ty); //例えばint **だったらtyはTY_PTR(
                              //                       base=TY_PTR(
                              //                              base=TY_INT
                              //                                   )
                              //                              )となる
+    }
 
-    return ty;
+    if (consume("("))
+    {
+        Type *placeholder = calloc(1, sizeof(Type));
+        Type *new_ty = declarator(placeholder, name);
+
+        expect(")");
+        *placeholder = *type_suffix(ty);
+
+        return new_ty;
+    }
+
+    *name = expect_ident();
+    return type_suffix(ty);
 }
 
-Type *read_type_suffix(Type *base)
+// type-suffix = ( "[" num "]" type-suffix)?
+Type *type_suffix(Type *ty)
 {
     if (!consume("["))
-        return base;          //そのまま返すだけ
+        return ty; //そのまま返すだけ
+
     int sz = expect_number(); // "["の次は1とかが来る
     expect("]");
-    base = read_type_suffix(base);
-    return array_of(base, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
+
+    ty = type_suffix(ty);
+    return array_of(ty, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
 }
 
 void push_tag_scope(Token *tok, Type *ty)
@@ -351,15 +384,19 @@ Type *struct_declaration()
     return ty;
 }
 
-// struct-member = basetype ident ( "[" num "]" )* ";"
+// struct-member = type-specifier declarator type-suffix ";"
 
 Member *struct_member()
 {
-    Member *mem = calloc(1, sizeof(Member));
-    mem->ty = basetype();
-    mem->name = expect_ident();
-    mem->ty = read_type_suffix(mem->ty);
+    Type *ty = type_specifier();
+    char *name = NULL;
+    ty = declarator(ty, &name);
+    ty = type_suffix(ty);
     expect(";");
+
+    Member *mem = calloc(1, sizeof(Member));
+    mem->name = name;
+    mem->ty = ty;
     return mem;
 }
 
@@ -367,15 +404,17 @@ VarList *read_func_param()
 {
     //fn(int x,int y)みたいになっているので"("の次はbasetypeが来ている
 
-    Type *ty = basetype();
+    Type *ty = type_specifier();
     //typeの次はIdentifier
-    char *name = expect_ident();
-    ty = read_type_suffix(ty);
+    char *name = NULL;
+    ty = declarator(ty, &name);
+    ty = type_suffix(ty);
 
     VarList *vl = calloc(1, sizeof(VarList));
     vl->var = push_var(name, ty, true); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
     return vl;
 }
+
 VarList *read_func_params()
 {
     if (consume(")"))
@@ -395,21 +434,30 @@ VarList *read_func_params()
     return head;
 }
 
-// function = basetype ident "(" params?")" "{" stmt* "}"
+// function = type-specifier declarator "(" params?")" "{" stmt* "}"
 // params = ident ("," ident)*
-// param  = basetype ident
+// param  = type-specifier declarator type-suffix
 Function *function()
 {
     locals = NULL;
 
+    Type *ty = type_specifier();
+    char *name = NULL;
+    ty = declarator(ty, &name);
+
+    //Add a fuction type to the scope
+    push_var(name, func_type(ty), false);
+
+    //Construct a function object
     Function *fn = calloc(1, sizeof(Function));
-    basetype(); //ここでは関数自体の戻り値はまだ使わないので、basetypeが来てるかだけ確認
-    fn->name = expect_ident();
+
+    fn->name = name;
 
     expect("(");
     fn->params = read_func_params();
     expect("{");
 
+    //Read function Body
     Node head;
     head.next = NULL;
     Node *cur = &head;
@@ -425,22 +473,24 @@ Function *function()
     return fn;
 }
 
-//global-var = basetype ident ( "[" num "]" )* ";"
+//global-var = type-specifier declarator type-suffix ";"
 void global_var()
 {
-    Type *ty = basetype();
-    char *name = expect_ident();
-    ty = read_type_suffix(ty);
+    Type *ty = type_specifier();
+    char *name = NULL;
+    ty = declarator(ty, &name);
+    ty = type_suffix(ty);
+
     expect(";");
     push_var(name, ty, false);
 }
 
-// declaration = basetype ident  ("[" num "]")*  ("=" expr) ";"
-//              | basetype ";"
+// declaration = type-specifier declarator type-suffix ("=" expr)? ";"
+//             | type-specifier ";"
 Node *declaration()
 {
     Token *tok = token;
-    Type *ty = basetype();
+    Type *ty = type_specifier();
 
     if (consume(";"))
     {
@@ -450,8 +500,15 @@ Node *declaration()
         return new_node(ND_NULL, tok);
     }
 
-    char *name = expect_ident();
-    ty = read_type_suffix(ty);           //suffixの分tyを変更、あるいはそのまま
+    char *name = NULL;
+    ty = declarator(ty, &name);
+    ty = type_suffix(ty); //suffixの分tyを変更、あるいはそのまま
+
+    if (ty->kind == TY_VOID)
+    {
+        error_tok(tok, "variable declared void");
+    }
+
     Var *var = push_var(name, ty, true); //ここでstructTypeもきちんと入る
 
     if (consume(";"))
@@ -475,7 +532,7 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || find_typedef(token);
+    return peek("void") || peek("_Bool") || peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || find_typedef(token);
 }
 
 // stmt = "return" expr ";"
@@ -483,7 +540,7 @@ bool is_typename()
 //        | "while" "(" expr ")" stmt
 //        | "for" "(" expr? ";" expr? ";" expr? ")" stmt
 //        | "{" stmt* "}"
-//        | "typedef" basetype ident ( "[" num "]")* ";"
+//        | "typedef" type-specifier declarator type-suffix  ";"
 //        | declaration
 //        | expr ";"
 
@@ -576,9 +633,10 @@ Node *stmt()
 
     if (tok = consume("typedef"))
     {
-        Type *ty = basetype();
-        char *name = expect_ident();
-        ty = read_type_suffix(ty);
+        Type *ty = type_specifier();
+        char *name = NULL;
+        ty = declarator(ty, &name);
+        ty = type_suffix(ty);
 
         expect(";");
 
@@ -838,6 +896,23 @@ Node *primary()
             Node *node = new_node(ND_FUNCALL, tok);
             node->funcname = strndup(tok->str, tok->len); //identの名前をコピー,funcnameはもうlabelによって登録されているのでVarみたいな処理はいらない
             node->args = func_args();
+
+            //すでに関数宣言で関数が変数として登録されているはずなので
+            VarScope *sc = find_var(tok);
+            if (sc)
+            {
+                if (!sc->var || sc->var->ty->kind != TY_FUNC)
+                {
+                    error_tok(tok, "not a function");
+                }
+
+                node->ty = sc->var->ty->return_ty; //ND_FUNCALLのTYPEは返り値の値になる
+            }
+            else
+            {
+                node->ty = int_type();
+            }
+
             return node;
         }
 

@@ -173,6 +173,8 @@ Program *program();
 
 typedef enum
 {
+    TY_VOID,
+    TY_BOOL,
     TY_CHAR,
     TY_SHORT,
     TY_INT,
@@ -180,6 +182,7 @@ typedef enum
     TY_PTR,
     TY_ARRAY,
     TY_STRUCT,
+    TY_FUNC
 } TypeKind;
 
 struct Type
@@ -189,6 +192,7 @@ struct Type
     Type *base;      // pointer or array
     int array_size;  // for Array
     Member *members; // for Struct
+    Type *return_ty; // function
 };
 
 // Struct member,例えば { int x; char y;}だと最初のMemberがxでnextがy
@@ -201,10 +205,13 @@ struct Member
 };
 
 int align_to(int n, int align);
+Type *void_type();
+Type *bool_type();
 Type *char_type();
 Type *short_type();
 Type *int_type();
 Type *long_type();
+Type *func_type(Type *return_ty);
 Type *pointer_to(Type *base);
 Type *array_of(Type *base, int size);
 int size_of(Type *ty);

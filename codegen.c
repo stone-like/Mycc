@@ -93,6 +93,14 @@ void store(Type *ty)
     printf("   pop rdi\n");
     printf("   pop rax\n");
 
+    if (ty->kind == TY_BOOL)
+    {
+        //boolの場合は０は０、それ以外は1なので、rdi,右辺の加工を行う
+        printf("   cmp rdi, 0\n");
+        printf("   setne dil\n");      //0に等しくないならbyteを入れる=1を入れる
+        printf("   movzb rdi, dil\n"); //1byte分以外全部0埋め
+    }
+
     int sz = size_of(ty);
 
     if (sz == 1)
