@@ -445,9 +445,6 @@ Function *function()
     char *name = NULL;
     ty = declarator(ty, &name);
 
-    //Add a fuction type to the scope
-    push_var(name, func_type(ty), false);
-
     //Construct a function object
     Function *fn = calloc(1, sizeof(Function));
 
@@ -456,6 +453,11 @@ Function *function()
     expect("(");
     fn->params = read_func_params();
     expect("{");
+
+    //Add a fuction type to the scope
+    Type *funcType = func_type(ty);
+    funcType->params = fn->params;
+    push_var(name, funcType, false);
 
     //Read function Body
     Node head;
@@ -867,6 +869,18 @@ Node *stmt_expr(Token *tok)
     return node;
 }
 
+void args_check(Node *args, VarList *params)
+{
+
+    VarList *param = params;
+    for (Node *arg = args; arg; arg = arg->next)
+    {
+        visit(arg);
+        typeCheck(param->var->ty, arg->ty, arg);
+        param = params->next;
+    }
+}
+
 //primary = "(" "{" stmt-expr-tail "}" ")"
 //           |  "(" expr ")" | "sizeof" unary | ident func-args? | str | num
 
@@ -894,6 +908,7 @@ Node *primary()
         //identのあとに"("が来ていれば関数呼び出し
         if (consume("("))
         {
+
             Node *node = new_node(ND_FUNCALL, tok);
             node->funcname = strndup(tok->str, tok->len); //identの名前をコピー,funcnameはもうlabelによって登録されているのでVarみたいな処理はいらない
             node->args = func_args();
@@ -906,6 +921,8 @@ Node *primary()
                 {
                     error_tok(tok, "not a function");
                 }
+
+                args_check(node->args, sc->var->ty->params);
 
                 node->ty = sc->var->ty->return_ty; //ND_FUNCALLのTYPEは返り値の値になる
             }

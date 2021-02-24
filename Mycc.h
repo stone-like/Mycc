@@ -194,6 +194,8 @@ struct Type
     int array_size;  // for Array
     Member *members; // for Struct
     Type *return_ty; // function
+    //functionParamを追加する
+    VarList *params; //function params
 };
 
 // Struct member,例えば { int x; char y;}だと最初のMemberがxでnextがy
@@ -220,6 +222,8 @@ int size_of(Type *ty);
 void add_type(Program *prog);
 void check_type(Program *prog);
 char *convertActualTypeName(TypeKind kind);
+void typeCheck(Type *type1, Type *type2, Node *node);
+void visit(Node *node);
 //
 // codegen.c
 //

@@ -239,28 +239,42 @@ void base_type_check(Type *fn_base, Type *node_base)
     }
 }
 
-void actual_check(Function *fn, Node *node)
+void typeCheck(Type *type1, Type *type2, Node *node)
+{
+    if (type1->base && type2->base)
+    {
+        return base_type_check(type1->base, type2->base);
+    }
+
+    if (type1->kind != type2->kind)
+    {
+        error_tok(node->tok, "this function unmatch returnType:  expect:%s,actual:%s\n", convertActualTypeName(type1->kind), convertActualTypeName(type2->kind));
+    }
+}
+
+void return_type_check(Function *fn, Node *node)
 {
     if (!node)
         return;
 
-    actual_check(fn, node->lhs);
-    actual_check(fn, node->then);
-    actual_check(fn, node->els);
+    return_type_check(fn, node->lhs);
+    return_type_check(fn, node->then);
+    return_type_check(fn, node->els);
     for (Node *n = node->body; n; n = n->next)
-        actual_check(fn, n);
+        return_type_check(fn, n);
 
     if (node->kind == ND_RETURN)
     {
-        if (fn->return_ty->base && node->lhs->ty->base)
-        {
-            return base_type_check(fn->return_ty->base, node->lhs->ty->base);
-        }
+        typeCheck(fn->return_ty, node->lhs->ty, node);
+        // if (fn->return_ty->base && node->lhs->ty->base)
+        // {
+        //     return base_type_check(fn->return_ty->base, node->lhs->ty->base);
+        // }
 
-        if (node->lhs->ty->kind != fn->return_ty->kind)
-        {
-            error_tok(node->tok, "this function unmatch returnType:  expect:%s,actual:%s\n", convertActualTypeName(fn->return_ty->kind), convertActualTypeName(node->lhs->ty->kind));
-        }
+        // if (node->lhs->ty->kind != fn->return_ty->kind)
+        // {
+        //     error_tok(node->tok, "this function unmatch returnType:  expect:%s,actual:%s\n", convertActualTypeName(fn->return_ty->kind), convertActualTypeName(node->lhs->ty->kind));
+        // }
     }
 }
 
@@ -269,10 +283,12 @@ void check_type(Program *prog)
     //int longとlong intは下の定義だと同じになるし、問題もたくさんあるけど試験的に作っただけということで一旦スルー
     //char *main() { return "aaa"; }でポインタとarrayでエラーになるのでこの辺も修正しないといけない,後if文みたいな奴に反応しないので、visitみたいにnestさせていかなくてはいけない
     for (Function *fn = prog->fns; fn; fn = fn->next)
+    {
         for (Node *node = fn->node; node; node = node->next)
         {
-            actual_check(fn, node);
+            return_type_check(fn, node);
         }
+    }
 }
 
 char *convertActualTypeName(TypeKind kind)

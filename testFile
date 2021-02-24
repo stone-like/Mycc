@@ -1,4 +1,9 @@
 
 //ここでprintfが呼べるのは自作コンパイラのコードで#include <stdio.h>をしていて、
 //それがgccでリンクされているから以下のコードで関数定義していないはずのprintfが使えた
-char **main() {  return "aaaa"; }
+
+int add(int a,char b){
+    return 3;
+}
+
+int main() { return add(1,2); }
