@@ -47,6 +47,7 @@ int main(int argc, char **argv)
     Program *prog = program();
 
     add_type(prog);
+    check_type(prog);
 
     //localsがprogで作られているのでoffsetを計算、実際にスタックにロードするのに備える
     for (Function *fn = prog->fns; fn; fn = fn->next)

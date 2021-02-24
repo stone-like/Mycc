@@ -154,6 +154,7 @@ typedef struct Function Function;
 struct Function
 {
     Function *next;
+    Type *return_ty;
     char *name;
     VarList *params;
     Node *node;
@@ -217,7 +218,8 @@ Type *array_of(Type *base, int size);
 int size_of(Type *ty);
 
 void add_type(Program *prog);
-
+void check_type(Program *prog);
+char *convertActualTypeName(TypeKind kind);
 //
 // codegen.c
 //

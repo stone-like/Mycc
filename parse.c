@@ -468,6 +468,7 @@ Function *function()
         cur = cur->next;
     }
 
+    fn->return_ty = ty;
     fn->node = head.next;
     fn->locals = locals; //functionを取得するたびにLocalsはNULLとなるのでFunctionごとのLocal
     return fn;

@@ -225,3 +225,77 @@ void add_type(Program *prog)
         for (Node *node = fn->node; node; node = node->next)
             visit(node);
 }
+
+void base_type_check(Type *fn_base, Type *node_base)
+{
+    if (fn_base->base && node_base->base)
+    {
+        return base_type_check(fn_base->base, node_base->base);
+    }
+
+    if (fn_base->kind != node_base->kind)
+    {
+        error("this function unmatch returnType:  expect:%s,actual:%s\n", convertActualTypeName(fn_base->kind), convertActualTypeName(node_base->kind));
+    }
+}
+
+void actual_check(Function *fn, Node *node)
+{
+    if (!node)
+        return;
+
+    actual_check(fn, node->lhs);
+    actual_check(fn, node->then);
+    actual_check(fn, node->els);
+    for (Node *n = node->body; n; n = n->next)
+        actual_check(fn, n);
+
+    if (node->kind == ND_RETURN)
+    {
+        if (fn->return_ty->base && node->lhs->ty->base)
+        {
+            return base_type_check(fn->return_ty->base, node->lhs->ty->base);
+        }
+
+        if (node->lhs->ty->kind != fn->return_ty->kind)
+        {
+            error_tok(node->tok, "this function unmatch returnType:  expect:%s,actual:%s\n", convertActualTypeName(fn->return_ty->kind), convertActualTypeName(node->lhs->ty->kind));
+        }
+    }
+}
+
+void check_type(Program *prog)
+{
+    //int longとlong intは下の定義だと同じになるし、問題もたくさんあるけど試験的に作っただけということで一旦スルー
+    //char *main() { return "aaa"; }でポインタとarrayでエラーになるのでこの辺も修正しないといけない,後if文みたいな奴に反応しないので、visitみたいにnestさせていかなくてはいけない
+    for (Function *fn = prog->fns; fn; fn = fn->next)
+        for (Node *node = fn->node; node; node = node->next)
+        {
+            actual_check(fn, node);
+        }
+}
+
+char *convertActualTypeName(TypeKind kind)
+{
+    switch (kind)
+    {
+    case TY_VOID:
+        return "void";
+    case TY_BOOL:
+        return "bool";
+    case TY_CHAR:
+        return "char";
+    case TY_SHORT:
+        return "short";
+    case TY_INT:
+        return "int";
+    case TY_LONG:
+        return "long";
+    case TY_PTR:
+        return "pointer";
+    case TY_ARRAY:
+        return "array";
+    case TY_STRUCT:
+        return "struct";
+    }
+}
