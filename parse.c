@@ -8,6 +8,7 @@ struct VarScope
 {
     VarScope *next;
     char *name;
+    int depth;
     Var *var;
     Type *type_def;
     Type *enum_ty;
@@ -20,6 +21,7 @@ struct TagScope
 {
     TagScope *next;
     char *name;
+    int depth;
     Type *ty;
 };
 
@@ -35,12 +37,16 @@ VarScope *var_scope; //そこまでに含まれている変数、localsは関数
 //scopeにはtypedefMemberがある
 
 TagScope *tag_scope;
+int scope_depth;
+
+Node *current_switch;
 
 Scope *enter_scope()
 {
     Scope *sc = calloc(1, sizeof(Scope));
     sc->var_scope = var_scope;
     sc->tag_scope = tag_scope;
+    ++scope_depth;
     return sc;
 }
 
@@ -48,6 +54,7 @@ void leave_scope(Scope *sc)
 {
     var_scope = sc->var_scope;
     tag_scope = sc->tag_scope;
+    --scope_depth;
 }
 // Find variable or a typedef by name.
 VarScope *find_var(Token *tok)
@@ -127,6 +134,7 @@ VarScope *push_scope(char *name)
     VarScope *sc = calloc(1, sizeof(VarScope));
     sc->name = name;
     sc->next = var_scope;
+    sc->depth = scope_depth;
     var_scope = sc;
     return sc;
 }
@@ -481,11 +489,12 @@ void push_tag_scope(Token *tok, Type *ty)
     TagScope *sc = calloc(1, sizeof(TagScope));
     sc->next = tag_scope;
     sc->name = strndup(tok->str, tok->len);
+    sc->depth = scope_depth;
     sc->ty = ty;
     tag_scope = sc;
 }
 
-// struct-declaration = "struct" ident | "struct"  ident? "{" struct-member "}"
+// struct-declaration = "struct" ident? ( "{" struct-member "}" )?
 // struct {}の{}までintみたいなtypeのうち　なのでここまでbasetypeでやって、その結果がVarに収容される
 Type *struct_declaration()
 { //struct declarationはTY_STRUCTを返す
@@ -499,16 +508,52 @@ Type *struct_declaration()
     {
         //もしstruct identなら登録済みのを利用する
         TagScope *sc = find_tag(tag);
+
         if (!sc)
-            error_tok(tag, "unknown struct type"); //構造体宣言までに、tagを使うのであればTagを登録しておくこと
+        {
+            //struct xとしたけど、tagがないとき
+            //struct identでtagが未登録なら、不完全構造体としてTagを新たに登録
+            Type *ty = struct_type();
+            push_tag_scope(tag, ty);
+            return ty;
+        }
+
         if (sc->ty->kind != TY_STRUCT)
             error_tok(tag, "not a struct tag");
+
         return sc->ty;
     }
 
-    //ここからはident {...}ならTag付けしつつ利用、普通にstruct {...}なら普通に利用
+    if (!consume("{"))
+    { //struct *fooみたいなtag付けもしないやつのとき、つまりstructのみがtypeのとき
+        //普通はstruct x とか struct {}、struct x {}みたいな感じなんだけどね
+        return struct_type();
+    }
 
-    expect("{");
+    //例えば 1- struct T *foo; 2- struct T { int x;};としたとき
+    //1ではstruct TのTがtagとして登録されるだけで不完全
+    //2で{int x;}まで宣言することで、↓以降に来ることができて、そこで初めて、findTagでTを持ってきて、Tが完全系となる
+
+    TagScope *sc = find_tag(tag);
+    Type *ty;
+
+    if (sc && sc->depth == scope_depth)
+    {
+
+        if (sc->ty->kind != TY_STRUCT)
+        {
+            error_tok(tag, "not a struct tag");
+        }
+        ty = sc->ty;
+    }
+    else
+    {
+        ty = struct_type();
+        if (tag)
+        {
+            push_tag_scope(tag, ty);
+        }
+    }
 
     // Read struct members;
     Member head;
@@ -521,8 +566,6 @@ Type *struct_declaration()
         cur = cur->next;
     }
 
-    Type *ty = calloc(1, sizeof(Type));
-    ty->kind = TY_STRUCT;
     ty->members = head.next;
 
     //Assign offsets within the struct to members.
@@ -542,9 +585,7 @@ Type *struct_declaration()
         }
     }
 
-    // Register the struct type if a name was given.
-    if (tag)
-        push_tag_scope(tag, ty);
+    ty->is_incomplete = false;
 
     return ty;
 }
@@ -801,9 +842,16 @@ bool is_typename()
 
 // stmt = "return" expr ";"
 //        | "if" "(" expr ")" stmt ("else" stmt)?
+//        | "switch" "(" expr ")" stmt
+//        | "case" num ":" stmt
+//        | "default" ":" stmt
 //        | "while" "(" expr ")" stmt
 //        | "for" "(" ( expr? ";" | declaration ) expr? ";" expr? ")" stmt
 //        | "{" stmt* "}"
+//        | "break" ";"
+//        | "continue" ";"
+//        | "goto" ident ";"
+//        | ident ":" stmt //例えばlabel1: {}とか
 //        | declaration
 //        | expr ";"
 
@@ -830,6 +878,52 @@ Node *stmt()
         node->then = stmt();
         if (consume("else"))
             node->els = stmt();
+        return node;
+    }
+
+    if (tok = consume("switch"))
+    {
+        Node *node = new_node(ND_SWITCH, tok);
+        expect("(");
+        node->cond = expr();
+        expect(")");
+
+        Node *sw = current_switch;
+        current_switch = node; //stmt中ではnodeがcurrent_switchとなる
+        node->then = stmt();
+        current_switch = sw;
+        return node;
+    }
+
+    //case,defaultは上記のstmt中のこと、stmt中でcurrent_switchにcase,defaultをどんどんつなげていく
+    if (tok = consume("case"))
+    {
+        if (!current_switch)
+        {
+            error_tok(tok, "stray case");
+        }
+
+        int val = expect_number();
+        expect(":");
+
+        Node *node = new_unary(ND_CASE, stmt(), tok);
+        node->val = val;
+        node->case_next = current_switch->case_next; //ここでswitchのnode=current_switchのcase_nextにcase式をどんどんつないでいく
+        current_switch->case_next = node;
+        return node;
+    }
+
+    if (tok = consume("default"))
+    {
+        if (!current_switch)
+        {
+            error_tok(tok, "stray default");
+        }
+
+        expect(":");
+
+        Node *node = new_unary(ND_CASE, stmt(), tok);
+        current_switch->default_case = node;
         return node;
     }
 
@@ -903,6 +997,38 @@ Node *stmt()
         Node *node = new_node(ND_BLOCK, tok);
         node->body = head.next;
         return node;
+    }
+
+    if (tok = consume("break"))
+    {
+        expect(";");
+        return new_node(ND_BREAK, tok);
+    }
+
+    if (tok = consume("continue"))
+    {
+        expect(";");
+        return new_node(ND_CONTINUE, tok);
+    }
+
+    if (tok = consume("goto"))
+    {
+        Node *node = new_node(ND_GOTO, tok);
+        node->label_name = expect_ident();
+        expect(";");
+        return node;
+    }
+
+    if (tok = consume_ident())
+    {
+        if (consume(":"))
+        {
+            Node *node = new_unary(ND_LABEL, stmt(), tok);
+            node->label_name = strndup(tok->str, tok->len);
+            return node;
+        }
+
+        token = tok; // identのあとに":"が来ないなら処理しなくていいので元に戻す
     }
 
     if (is_typename())

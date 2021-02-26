@@ -5,7 +5,10 @@ char *argreg2[] = {"di", "si", "dx", "cx", "r8w", "r9w"};
 char *argreg4[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"}; //下位32bit = 4byte
 char *argreg8[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};   //関数の引数リスト、現在6引数まで
 
-int labelseq = 0; //複数if文とカあるときにlabelがかぶらないように
+int labelseq = 1; //複数if文とかあるときにlabelがかぶらないように
+int breakseq;
+int continueseq;
+
 char *funcname;
 
 void gen(Node *node);
@@ -378,20 +381,33 @@ void gen(Node *node)
     case ND_WHILE:
     {
         int seq = labelseq++;
-        printf(".Lbegin%d:\n", seq);
+        int brk = breakseq;
+        int cont = continueseq;
+
+        breakseq = continueseq = seq;
+
+        printf(".L.continue.%d:\n", seq);
         gen(node->cond);
         printf("   pop rax\n");
         printf("   cmp rax, 0\n");
-        printf("   je .Lend%d\n", seq);
+        printf("   je .L.break.%d\n", seq);
         gen(node->then);
-        printf("   jmp .Lbegin%d\n", seq);
-        printf(".Lend%d:\n", seq);
+        printf("   jmp .L.continue.%d\n", seq);
+        printf(".L.break.%d:\n", seq);
+
+        breakseq = brk;
+        continueseq = cont;
         return;
     }
 
     case ND_FOR:
     {
         int seq = labelseq++;
+        int brk = breakseq;
+        int cont = continueseq;
+        breakseq = continueseq = seq; //for内ではbreakseqはlabeseqと同じ値になっていて、
+        //for(){break;}とあるとき、for内のgen(node->then);でbreakが呼ばれて、その時breakseqはlabelseqと同じになっているので、しっかり望んだbreakの場所に行ける想定
+
         if (node->init)
             gen(node->init); //i=0でstoreの最後にpushした値は特にいらないので(必要なのはiのアドレスに0をstoreすることだけ)ここは式文
         printf(".Lbegin%d:\n", seq);
@@ -400,15 +416,60 @@ void gen(Node *node)
             gen(node->cond); //ここで式文にしているとスタックトップが捨てられるのでここは式
             printf("   pop rax\n");
             printf("   cmp rax, 0\n");
-            printf("   je .Lend%d\n", seq);
+            printf("   je .L.break.%d\n", seq);
         }
         gen(node->then);
-
+        printf(".L.continue.%d:\n", seq);
         if (node->inc)
             gen(node->inc);
         printf("   jmp .Lbegin%d\n", seq);
 
-        printf(".Lend%d:\n", seq);
+        printf(".L.break.%d:\n", seq);
+
+        breakseq = brk;
+        continueseq = cont;
+        return;
+    }
+    case ND_SWITCH:
+    {
+        int seq = labelseq++;
+        int brk = breakseq;
+
+        breakseq = seq;
+        node->case_label = seq;
+
+        gen(node->cond);
+        printf("   pop rax\n");
+
+        for (Node *n = node->case_next; n; n = n->case_next)
+        {
+            n->case_label = labelseq++; //case_labelはcaseごとに１ずつ増えていくけど、case_end_labelはseqのまま変わらず
+            n->case_end_label = seq;
+            printf("   cmp rax, %ld\n", n->val);
+            printf("   je .L.case.%d\n", n->case_label);
+        }
+
+        if (node->default_case)
+        {
+            int i = labelseq++;
+            node->default_case->case_end_label = seq;
+            node->default_case->case_label = i;
+            printf("   jmp .L.case.%d\n", i);
+        }
+
+        printf("   jmp .L.break.%d\n", seq);
+        gen(node->then);
+        printf(".L.break.%d:\n", seq);
+
+        breakseq = brk;
+        return;
+    }
+
+    case ND_CASE:
+    {
+        printf(".L.case.%d:\n", node->case_label);
+        gen(node->lhs);
+        printf("   jmp .L.break.%d\n", node->case_end_label); //case_end_labelは全case共通
         return;
     }
     case ND_BLOCK:
@@ -417,6 +478,28 @@ void gen(Node *node)
         {
             gen(n);
         }
+        return;
+    case ND_BREAK:
+    {
+        if (breakseq == 0)
+            error_tok(node->tok, "stray break");
+
+        printf("   jmp .L.break.%d\n", breakseq);
+        return;
+    }
+    case ND_CONTINUE:
+    {
+        if (continueseq == 0)
+            error_tok(node->tok, "stray break");
+        printf("   jmp .L.continue.%d\n", continueseq);
+        return;
+    }
+    case ND_GOTO: // funcname = fn->name;とfnsを回すときにやっている,なのでfuncnameは現在の関数名,なので関数が違えばラベル名が同じでも問題ない
+        printf("   jmp .L.label.%s.%s\n", funcname, node->label_name);
+        return;
+    case ND_LABEL:
+        printf(".L.label.%s.%s:\n", funcname, node->label_name);
+        gen(node->lhs);
         return;
     case ND_FUNCALL:
     {

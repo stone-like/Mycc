@@ -118,8 +118,14 @@ typedef enum
     ND_IF,        // "if"
     ND_WHILE,     // "while"
     ND_FOR,       // "for"
+    ND_SWITCH,    // "switch"
+    ND_CASE,      // "case"
     ND_SIZEOF,    // "sizeof"
     ND_BLOCK,     // {...}
+    ND_BREAK,     // "break"
+    ND_CONTINUE,  // "continue"
+    ND_GOTO,      // "goto"
+    ND_LABEL,     // Labeled statement
     ND_FUNCALL,   //Function Call
     ND_EXPR_STMT, // Expression statement
     ND_STMT_EXPR, // Statement Expression 文を式として扱える、例えばreturn { int x=2; x;}とかできる
@@ -162,6 +168,15 @@ struct Node
     //Function Call
     char *funcname;
     Node *args;
+
+    //Goto or labeled statement
+    char *label_name;
+
+    //Switch-cases
+    Node *case_next;
+    Node *default_case;
+    int case_label;
+    int case_end_label;
 
     Var *var; //Used if kind == ND_VAR
     long val; // Used if kind == ND_NUM
@@ -235,6 +250,7 @@ Type *short_type();
 Type *int_type();
 Type *long_type();
 Type *enum_type();
+Type *struct_type();
 Type *func_type(Type *return_ty);
 Type *pointer_to(Type *base);
 Type *array_of(Type *base, int size);
