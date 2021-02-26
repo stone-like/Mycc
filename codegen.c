@@ -64,7 +64,7 @@ void load(Type *ty)
     //loadの直前でアドレスがスタックトップにあるはずなので
     printf("   pop rax\n");
 
-    int sz = size_of(ty);
+    int sz = size_of(ty, NULL);
 
     if (sz == 1)
     {
@@ -101,7 +101,7 @@ void store(Type *ty)
         printf("   movzb rdi, dil\n"); //1byte分以外全部0埋め
     }
 
-    int sz = size_of(ty);
+    int sz = size_of(ty, NULL);
 
     if (sz == 1)
     {
@@ -134,7 +134,7 @@ void truncate(Type *ty)
         printf("   setne al\n");
     }
 
-    int sz = size_of(ty);
+    int sz = size_of(ty, NULL);
 
     if (sz == 1)
     {
@@ -151,17 +151,19 @@ void truncate(Type *ty)
     printf("  push rax\n");
 }
 
-void inc(Type *ty)
+void inc(Node *node)
 {
+    int sz = node->ty->base ? size_of(node->ty->base, node->tok) : 1;
     printf("   pop rax\n");
-    printf("   add rax, %d\n", ty->base ? size_of(ty->base) : 1);
+    printf("   add rax, %d\n", sz);
     printf("   push rax\n");
 }
 
-void dec(Type *ty)
+void dec(Node *node)
 {
+    int sz = node->ty->base ? size_of(node->ty->base, node->tok) : 1;
     printf("   pop rax\n");
-    printf("   sub rax, %d\n", ty->base ? size_of(ty->base) : 1);
+    printf("   sub rax, %d\n", sz);
     printf("   push rax\n");
 }
 
@@ -209,31 +211,31 @@ void gen(Node *node)
         gen_lval(node->lhs);
         printf("   push [rsp]\n"); //この時点ではスタックに 同じ変数のアドレスを二個積んでいる
         load(node->ty);
-        inc(node->ty);
+        inc(node);
         store(node->ty); //最初に同じ変数のアドレスを二個積んだのはloadで一個目、storeで二個目を使うため
         return;
     case ND_PRE_DEC:
         gen_lval(node->lhs);
         printf("   push [rsp]\n");
         load(node->ty);
-        dec(node->ty);
+        dec(node);
         store(node->ty);
         return;
     case ND_POST_INC:
         gen_lval(node->lhs);
         printf("   push [rsp]\n");
         load(node->ty);
-        inc(node->ty);
+        inc(node);
         store(node->ty); //ここで変数的にはincされているけど
-        dec(node->ty);   //返り値(最後のスタックにpushされる)やつはdecされているので元のx
+        dec(node);       //返り値(最後のスタックにpushされる)やつはdecされているので元のx
         return;
     case ND_POST_DEC:
         gen_lval(node->lhs);
         printf("   push [rsp]\n");
         load(node->ty);
-        dec(node->ty);
+        dec(node);
         store(node->ty);
-        inc(node->ty);
+        inc(node);
         return;
     case ND_A_ADD:
     case ND_A_SUB:
@@ -251,12 +253,12 @@ void gen(Node *node)
         {
         case ND_A_ADD:
             if (node->ty->base)
-                printf("  imul rdi, %d\n", size_of(node->ty->base));
+                printf("  imul rdi, %d\n", size_of(node->ty->base, node->tok));
             printf("  add rax, rdi\n");
             break;
         case ND_A_SUB:
             if (node->ty->base)
-                printf("  imul rdi, %d\n", size_of(node->ty->base));
+                printf("  imul rdi, %d\n", size_of(node->ty->base, node->tok));
             printf("  sub rax, rdi\n");
             break;
         case ND_A_MUL:
@@ -490,12 +492,12 @@ void gen(Node *node)
     {
     case ND_ADD:
         if (node->ty->base)
-            printf("   imul rdi, %d\n", size_of(node->ty->base));
+            printf("   imul rdi, %d\n", size_of(node->ty->base, node->tok));
         printf("  add rax, rdi\n");
         break;
     case ND_SUB:
         if (node->ty->base)
-            printf("   imul rdi, %d\n", size_of(node->ty->base));
+            printf("   imul rdi, %d\n", size_of(node->ty->base, node->tok));
         printf("  sub rax, rdi\n");
         break;
     case ND_MUL:
@@ -551,7 +553,7 @@ void emit_data(Program *prog)
         if (!var->contents)
         {
             //""みたいに空Stringだったら
-            printf("   .zero %d\n", size_of(var->ty));
+            printf("   .zero %d\n", size_of(var->ty, var->tok));
             continue;
         }
 
@@ -564,7 +566,7 @@ void emit_data(Program *prog)
 
 void load_arg(Var *var, int idx)
 {
-    int sz = size_of(var->ty);
+    int sz = size_of(var->ty, var->tok);
     if (sz == 1)
     {
         printf("   mov [rbp-%d], %s\n", var->offset, argreg1[idx]);

@@ -61,7 +61,7 @@ int main(int argc, char **argv)
             // char offset (align(0,1)=0 + sizeof char =1) = 1
             // int  offset (align(1,8)=8 + sizeof int = 8) = 16
             //これはalign_toがなければできない
-            offset += size_of(var->ty);
+            offset += size_of(var->ty, var->tok);
             vl->var->offset = offset;
         }
         fn->stack_size = align_to(offset, 8); //最後のスタックのアドレスをアラインしただけでローカル変数レベルではalignしていない,スタックにプッシュするのも8byte単位

@@ -70,9 +70,13 @@ Type *array_of(Type *base, int size)
     return ty;
 }
 
-int size_of(Type *ty)
+int size_of(Type *ty, Token *tok)
 {
     assert(ty->kind != TY_VOID);
+
+    if (ty->is_incomplete)
+        //宣言自体はincompleteでもいいけど、parseを終え、add_typeするまでには完全系にしておかないとダメということかな
+        error_tok(tok, "incomplete type");
 
     switch (ty->kind)
     {
@@ -88,13 +92,13 @@ int size_of(Type *ty)
     case TY_PTR:
         return 8;
     case TY_ARRAY:
-        return size_of(ty->base) * ty->array_size; //再帰でsizeを獲得
+        return size_of(ty->base, tok) * ty->array_size; //再帰でsizeを獲得
     default:
         assert(ty->kind == TY_STRUCT);
         Member *mem = ty->members;
         while (mem->next)
             mem = mem->next;
-        int end = mem->offset + size_of(mem->ty);
+        int end = mem->offset + size_of(mem->ty, tok);
         return align_to(end, ty->align); //構造体の中で最大のサイズのalignとなる
         //構造体レベルのalign
     }
@@ -233,7 +237,7 @@ void visit(Node *node)
     case ND_SIZEOF: //ノードタイプをSIZEOFからNUMへ変化させる
         node->kind = ND_NUM;
         node->ty = int_type();
-        node->val = size_of(node->lhs->ty);
+        node->val = size_of(node->lhs->ty, node->tok);
         node->lhs = NULL;
         return;
     case ND_STMT_EXPR:

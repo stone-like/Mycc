@@ -23,6 +23,12 @@ struct TagScope
     Type *ty;
 };
 
+typedef struct
+{
+    VarScope *var_scope;
+    TagScope *tag_scope;
+} Scope;
+
 VarList *locals;
 VarList *globals;
 VarScope *var_scope; //そこまでに含まれている変数、localsは関数全体だが、scopeはint main(){int x; int y;}のint xの部分までだったらxまでとなる
@@ -30,6 +36,19 @@ VarScope *var_scope; //そこまでに含まれている変数、localsは関数
 
 TagScope *tag_scope;
 
+Scope *enter_scope()
+{
+    Scope *sc = calloc(1, sizeof(Scope));
+    sc->var_scope = var_scope;
+    sc->tag_scope = tag_scope;
+    return sc;
+}
+
+void leave_scope(Scope *sc)
+{
+    var_scope = sc->var_scope;
+    tag_scope = sc->tag_scope;
+}
 // Find variable or a typedef by name.
 VarScope *find_var(Token *tok)
 {
@@ -114,13 +133,14 @@ VarScope *push_scope(char *name)
 
 //NodeごとにTypeを入れるときに、Varの場合はnode->ty = node->var->tyとなる
 //localsに追加
-Var *push_var(char *name, Type *ty, bool is_local)
+Var *push_var(char *name, Type *ty, bool is_local, Token *tok)
 {
     //新しい奴から先頭に来る
     Var *var = calloc(1, sizeof(Var));
     var->name = name;
     var->ty = ty;
     var->is_local = is_local;
+    var->tok = tok;
 
     VarList *vl = calloc(1, sizeof(VarList));
     vl->var = var;
@@ -423,17 +443,29 @@ Type *abstract_declarator(Type *ty)
     return type_suffix(ty);
 }
 
-// type-suffix = ( "[" num "]" type-suffix)?
+// type-suffix = ( "[" num? "]" type-suffix)?
 Type *type_suffix(Type *ty)
 {
     if (!consume("["))
         return ty; //そのまま返すだけ
 
-    int sz = expect_number(); // "["の次は1とかが来る
-    expect("]");
+    //Arrayの場合
+    int sz = 0;
+    bool is_incomplete = true;
+    if (!consume("]"))
+    {
+        //数字が書いてあって完全系なら
+        sz = expect_number();
+        is_incomplete = false;
+        expect("]");
+    }
 
     ty = type_suffix(ty);
-    return array_of(ty, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる
+
+    ty = array_of(ty, sz); //int[2]だとarray_od(int,2)でint[2][3]だとarray_of(array_of(int,3),2)となる,
+    //int[]みたいな不完全系ならty->array_size = 0;となり、is_incompleteもtrueのまま
+    ty->is_incomplete = is_incomplete;
+    return ty;
 }
 
 // type-name = type-specifier abstract-declarator type-suffix
@@ -499,7 +531,7 @@ Type *struct_declaration()
     {
         offset = align_to(offset, mem->ty->align);
         mem->offset = offset;
-        offset += size_of(mem->ty);
+        offset += size_of(mem->ty, mem->tok);
 
         if (ty->align < mem->ty->align)
         {
@@ -578,6 +610,7 @@ Type *enum_specifier()
 Member *struct_member()
 {
     Type *ty = type_specifier();
+    Token *tok = token;
     char *name = NULL;
     ty = declarator(ty, &name);
     ty = type_suffix(ty);
@@ -586,6 +619,7 @@ Member *struct_member()
     Member *mem = calloc(1, sizeof(Member));
     mem->name = name;
     mem->ty = ty;
+    mem->tok = tok;
     return mem;
 }
 
@@ -596,11 +630,20 @@ VarList *read_func_param()
     Type *ty = type_specifier();
     //typeの次はIdentifier
     char *name = NULL;
+    Token *tok = token;
     ty = declarator(ty, &name);
     ty = type_suffix(ty);
 
-    Var *var = push_var(name, ty, true); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
-    push_scope(name)->var = var;         //scopeにも入れる
+    //もしパラメーターでarray[int]があったらpointer to intに変換する,
+    // *int[] だったら　**intとなる
+
+    if (ty->kind == TY_ARRAY)
+    {
+        ty = pointer_to(ty->base);
+    }
+
+    Var *var = push_var(name, ty, true, tok); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
+    push_scope(name)->var = var;              //scopeにも入れる
     VarList *vl = calloc(1, sizeof(VarList));
     vl->var = var;
     return vl;
@@ -634,10 +677,11 @@ Function *function()
 
     Type *ty = type_specifier();
     char *name = NULL;
+    Token *tok = token;
     ty = declarator(ty, &name);
 
     //Add a fuction type to the scope
-    Var *var = push_var(name, func_type(ty), false);
+    Var *var = push_var(name, func_type(ty), false, tok);
     push_scope(name)->var = var;
 
     //Construct a function object
@@ -674,11 +718,12 @@ void global_var()
 {
     Type *ty = type_specifier();
     char *name = NULL;
+    Token *tok = token;
     ty = declarator(ty, &name);
     ty = type_suffix(ty);
 
     expect(";");
-    Var *var = push_var(name, ty, false);
+    Var *var = push_var(name, ty, false, tok);
     push_scope(name)->var = var;
 }
 
@@ -686,10 +731,10 @@ void global_var()
 //             | type-specifier ";"
 Node *declaration()
 {
-    Token *tok = token;
+    Token *tok;
     Type *ty = type_specifier();
 
-    if (consume(";"))
+    if (tok = consume(";"))
     {
         //basetype()の中にstruct_declarationも含まれているので,ここのifでは、
         // struct x {...};みたいなtag付けを処理する
@@ -697,7 +742,10 @@ Node *declaration()
         return new_node(ND_NULL, tok);
     }
 
+    tok = token;
+
     char *name = NULL;
+
     ty = declarator(ty, &name);
     ty = type_suffix(ty); //suffixの分tyを変更、あるいはそのまま
 
@@ -718,11 +766,11 @@ Node *declaration()
     Var *var;
     if (ty->is_static)
     {
-        var = push_var(new_label(), ty, false);
+        var = push_var(new_label(), ty, false, tok);
     }
     else
     {
-        var = push_var(name, ty, true); //ここでstructTypeもきちんと入る
+        var = push_var(name, ty, true, tok); //ここでstructTypeもきちんと入る
     }
 
     push_scope(name)->var = var;
@@ -800,8 +848,7 @@ Node *stmt()
         Node *node = new_node(ND_FOR, tok);
         expect("(");
 
-        VarScope *sc1 = var_scope;
-        TagScope *sc2 = tag_scope;
+        Scope *sc = enter_scope();
 
         if (!consume(";"))
         {
@@ -832,8 +879,7 @@ Node *stmt()
 
         //for内のint i=0;みたいな宣言したローカル変数もfor{}のBlockのみでだけいるので、scopeをもどしてあげる
 
-        var_scope = sc1;
-        tag_scope = sc2;
+        leave_scope(sc);
         return node;
     }
 
@@ -844,8 +890,7 @@ Node *stmt()
         Node *cur = &head;
 
         //NodeBlockにscopeを追加,ここのscopeの生存期間はBlockの中でだけ
-        VarScope *sc1 = var_scope;
-        TagScope *sc2 = tag_scope;
+        Scope *sc = enter_scope();
 
         while (!consume("}"))
         {
@@ -853,8 +898,7 @@ Node *stmt()
             cur = cur->next;
         }
 
-        var_scope = sc1; //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
-        tag_scope = sc2;
+        leave_scope(sc);
 
         Node *node = new_node(ND_BLOCK, tok);
         node->body = head.next;
@@ -1186,8 +1230,7 @@ Node *func_args()
 //Statement expression is a GNU C extensionらしい
 Node *stmt_expr(Token *tok)
 {
-    VarScope *sc1 = var_scope;
-    TagScope *sc2 = tag_scope;
+    Scope *sc = enter_scope();
 
     Node *node = new_node(ND_STMT_EXPR, tok);
     node->body = stmt();
@@ -1201,8 +1244,7 @@ Node *stmt_expr(Token *tok)
 
     expect(")");
 
-    var_scope = sc1;
-    tag_scope = sc2;
+    leave_scope(sc);
     //stmtの中を巡ったのでscopeをBlockに入る前のscopeに戻している
 
     if (cur->kind != ND_EXPR_STMT)
@@ -1248,7 +1290,7 @@ Node *primary()
             {
                 Type *ty = type_name();
                 expect(")");
-                return new_num(size_of(ty), tok);
+                return new_num(size_of(ty, tok), tok);
             }
 
             token = tok->next;
@@ -1297,7 +1339,7 @@ Node *primary()
         error_tok(tok, "undefined variable");
     }
 
-    tok = token; //primaryでnumの場合
+    tok = token;
 
     if (tok->kind == TK_STR)
     {
@@ -1305,7 +1347,7 @@ Node *primary()
         token = token->next; //これはただ次のtokenに行くだけ
 
         Type *ty = array_of(char_type(), tok->count_len);
-        Var *var = push_var(new_label(), ty, false);
+        Var *var = push_var(new_label(), ty, false, NULL);
         var->contents = tok->contents;
         var->count_len = tok->count_len;
 

@@ -65,6 +65,7 @@ struct Var
 {
     char *name;
     Type *ty;
+    Token *tok;    //for error message
     bool is_local; //local or global
 
     //Used For Local Variable
@@ -206,13 +207,14 @@ typedef enum
 struct Type
 {
     TypeKind kind;
-    bool is_typedef; //typedef
-    bool is_static;  //static
-    int align;       //alignment
-    Type *base;      // pointer or array
-    int array_size;  // for Array
-    Member *members; // for Struct
-    Type *return_ty; // function
+    bool is_typedef;    //typedef
+    bool is_static;     //static
+    bool is_incomplete; //incomplete array
+    int align;          //alignment
+    Type *base;         // pointer or array
+    int array_size;     // for Array
+    Member *members;    // for Struct
+    Type *return_ty;    // function
 };
 
 // Struct member,例えば { int x; char y;}だと最初のMemberがxでnextがy
@@ -220,6 +222,7 @@ struct Member
 {
     Member *next;
     Type *ty;
+    Token *tok; //for error message
     char *name;
     int offset;
 };
@@ -235,7 +238,7 @@ Type *enum_type();
 Type *func_type(Type *return_ty);
 Type *pointer_to(Type *base);
 Type *array_of(Type *base, int size);
-int size_of(Type *ty);
+int size_of(Type *ty, Token *tok);
 
 void add_type(Program *prog);
 
