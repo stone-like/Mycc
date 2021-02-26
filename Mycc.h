@@ -94,9 +94,25 @@ typedef enum
     ND_LT,        // <
     ND_LE,        // <=
     ND_ASSIGN,    // =
+    ND_PRE_INC,   // pre ++
+    ND_PRE_DEC,   // pre --
+    ND_POST_INC,  // post ++
+    ND_POST_DEC,  // post --
+    ND_A_ADD,     // +=
+    ND_A_SUB,     // -=
+    ND_A_MUL,     // *=
+    ND_A_DIV,     // /=
+    ND_BITAND,    // &
+    ND_BITOR,     // |
+    ND_BITXOR,    // ^
+    ND_COMMA,     // ,
     ND_MEMBER,    // . (struct member access)
     ND_ADDR,      // unary &
     ND_DEREF,     // unary *
+    ND_NOT,       // !,
+    ND_BITNOT,    // ~
+    ND_LOGAND,    // &&
+    ND_LOGOR,     // ||
     ND_RETURN,    //Return
     ND_IF,        // "if"
     ND_WHILE,     // "while"
@@ -180,6 +196,7 @@ typedef enum
     TY_SHORT,
     TY_INT,
     TY_LONG,
+    TY_ENUM,
     TY_PTR,
     TY_ARRAY,
     TY_STRUCT,
@@ -190,6 +207,7 @@ struct Type
 {
     TypeKind kind;
     bool is_typedef; //typedef
+    bool is_static;  //static
     int align;       //alignment
     Type *base;      // pointer or array
     int array_size;  // for Array
@@ -213,6 +231,7 @@ Type *char_type();
 Type *short_type();
 Type *int_type();
 Type *long_type();
+Type *enum_type();
 Type *func_type(Type *return_ty);
 Type *pointer_to(Type *base);
 Type *array_of(Type *base, int size);

@@ -151,6 +151,20 @@ void truncate(Type *ty)
     printf("  push rax\n");
 }
 
+void inc(Type *ty)
+{
+    printf("   pop rax\n");
+    printf("   add rax, %d\n", ty->base ? size_of(ty->base) : 1);
+    printf("   push rax\n");
+}
+
+void dec(Type *ty)
+{
+    printf("   pop rax\n");
+    printf("   sub rax, %d\n", ty->base ? size_of(ty->base) : 1);
+    printf("   push rax\n");
+}
+
 void gen(Node *node)
 {
 
@@ -191,6 +205,78 @@ void gen(Node *node)
         gen(node->rhs);
         store(node->ty);
         return;
+    case ND_PRE_INC:
+        gen_lval(node->lhs);
+        printf("   push [rsp]\n"); //この時点ではスタックに 同じ変数のアドレスを二個積んでいる
+        load(node->ty);
+        inc(node->ty);
+        store(node->ty); //最初に同じ変数のアドレスを二個積んだのはloadで一個目、storeで二個目を使うため
+        return;
+    case ND_PRE_DEC:
+        gen_lval(node->lhs);
+        printf("   push [rsp]\n");
+        load(node->ty);
+        dec(node->ty);
+        store(node->ty);
+        return;
+    case ND_POST_INC:
+        gen_lval(node->lhs);
+        printf("   push [rsp]\n");
+        load(node->ty);
+        inc(node->ty);
+        store(node->ty); //ここで変数的にはincされているけど
+        dec(node->ty);   //返り値(最後のスタックにpushされる)やつはdecされているので元のx
+        return;
+    case ND_POST_DEC:
+        gen_lval(node->lhs);
+        printf("   push [rsp]\n");
+        load(node->ty);
+        dec(node->ty);
+        store(node->ty);
+        inc(node->ty);
+        return;
+    case ND_A_ADD:
+    case ND_A_SUB:
+    case ND_A_MUL:
+    case ND_A_DIV:
+    {
+        gen_lval(node->lhs);
+        printf("   push [rsp]\n");
+        load(node->lhs->ty);
+        gen(node->rhs);
+        printf("   pop rdi\n");
+        printf("   pop rax\n");
+
+        switch (node->kind)
+        {
+        case ND_A_ADD:
+            if (node->ty->base)
+                printf("  imul rdi, %d\n", size_of(node->ty->base));
+            printf("  add rax, rdi\n");
+            break;
+        case ND_A_SUB:
+            if (node->ty->base)
+                printf("  imul rdi, %d\n", size_of(node->ty->base));
+            printf("  sub rax, rdi\n");
+            break;
+        case ND_A_MUL:
+            printf("  imul rax, rdi\n");
+            break;
+        case ND_A_DIV:
+            printf("  cqo\n");
+            printf("  idiv rdi\n");
+            break;
+        }
+
+        printf("   push rax\n"); //ここまでで変数のアドレス,計算結果の値が順にスタックに積まれているのであとはstoreする
+        store(node->ty);
+        return;
+    }
+
+    case ND_COMMA:
+        gen(node->lhs);
+        gen(node->rhs);
+        return;
     case ND_ADDR:
         gen_addr(node->lhs); //&aの時でアドレスが欲しいのでloadをしないでgen_addrまで
         return;
@@ -203,6 +289,63 @@ void gen(Node *node)
             load(node->ty);
         }
         return;
+    case ND_NOT:
+        gen(node->lhs);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   sete al\n"); //0と比較して、0だったら１を入れる(NOTのなので)
+        printf("   movzb rax, al\n");
+        printf("   push rax\n");
+        return;
+    case ND_BITNOT:
+        gen(node->lhs);
+        printf("   pop rax\n");
+        printf("   not rax\n");
+        printf("   push rax\n");
+        return;
+    case ND_LOGAND:
+    {
+        int seq = labelseq++;
+        gen(node->lhs);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   je .Lfalse%d\n", seq); //andなのでどっちか一個でも0だったらfalseに飛ばす
+        gen(node->rhs);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   je .Lfalse%d\n", seq);
+
+        printf("   push 1\n"); //ここまででfalseに飛んでいないならtrueなので1を返すことにする
+        printf("   jmp .Lend%d\n", seq);
+        printf(".Lfalse%d:\n", seq);
+        printf("   push 0\n"); //falseに飛んだ場合は0を返す
+
+        printf(".Lend%d:\n", seq);
+
+        return;
+    }
+
+    case ND_LOGOR:
+    {
+        int seq = labelseq++;
+        gen(node->lhs);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   jne .Ltrue%d\n", seq); //ORの場合はどっちか一個でもtrueならtrue
+        gen(node->rhs);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   jne .Ltrue%d\n", seq); //ORの場合はどっちか一個でもtrueならtrue
+
+        printf("   push 0\n");
+        printf("   jmp .Lend%d\n", seq);
+
+        printf(".Ltrue%d:\n", seq);
+        printf("   push 1\n");
+
+        printf(".Lend%d:\n", seq);
+        return;
+    }
     case ND_IF:
     {
         int seq = labelseq++;
@@ -361,6 +504,15 @@ void gen(Node *node)
     case ND_DIV:
         printf("  cqo\n");
         printf("  idiv rdi\n");
+        break;
+    case ND_BITAND:
+        printf("  and rax, rdi\n");
+        break;
+    case ND_BITOR:
+        printf("  or rax, rdi\n");
+        break;
+    case ND_BITXOR:
+        printf("  xor rax, rdi\n");
         break;
     case ND_EQ:
         printf("  cmp rax, rdi\n");

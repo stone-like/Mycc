@@ -43,6 +43,11 @@ Type *long_type()
     return new_type(TY_LONG, 8);
 }
 
+Type *enum_type()
+{
+    return new_type(TY_ENUM, 4);
+}
+
 Type *func_type(Type *return_ty)
 {
     Type *ty = new_type(TY_FUNC, 1);
@@ -77,6 +82,7 @@ int size_of(Type *ty)
     case TY_SHORT:
         return 2;
     case TY_INT:
+    case TY_ENUM:
         return 4;
     case TY_LONG:
     case TY_PTR:
@@ -127,10 +133,17 @@ void visit(Node *node)
     {
     case ND_MUL:
     case ND_DIV:
+    case ND_BITAND:
+    case ND_BITOR:
+    case ND_BITXOR:
     case ND_EQ:
     case ND_NE:
     case ND_LT:
     case ND_LE:
+    case ND_NOT:
+    case ND_BITNOT:
+    case ND_LOGOR:
+    case ND_LOGAND:
         node->ty = int_type();
         return;
     case ND_NUM:
@@ -159,7 +172,18 @@ void visit(Node *node)
         node->ty = node->lhs->ty;
         return;
     case ND_ASSIGN:
+    case ND_PRE_INC: //INC,DEC系はlhsに変数が来るはずなのでそのtypeに
+    case ND_PRE_DEC:
+    case ND_POST_INC:
+    case ND_POST_DEC:
+    case ND_A_ADD:
+    case ND_A_SUB:
+    case ND_A_MUL:
+    case ND_A_DIV:
         node->ty = node->lhs->ty;
+        return;
+    case ND_COMMA:
+        node->ty = node->rhs->ty;
         return;
     case ND_MEMBER:
     {

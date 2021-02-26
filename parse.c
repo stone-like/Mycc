@@ -10,6 +10,8 @@ struct VarScope
     char *name;
     Var *var;
     Type *type_def;
+    Type *enum_ty;
+    int enum_val;
 };
 
 // Scope For Struct Tag
@@ -135,7 +137,7 @@ Var *push_var(char *name, Type *ty, bool is_local)
     }
 
     //ローカル、グローバル関係なく現時点までの変数をすべて追加
-    push_scope(name)->var = var;
+    // push_scope(name)->var = var; //push_varでやるのではなく、push_varした後、別にまた呼び出して分離してscopeに入れることにした
 
     return var;
 }
@@ -171,6 +173,7 @@ Type *type_suffix(Type *ty);
 Type *type_name();
 
 Type *struct_declaration();
+Type *enum_specifier();
 Member *struct_member();
 void global_var();
 Node *declaration();
@@ -178,6 +181,11 @@ bool is_typename();
 Node *stmt();
 Node *expr();
 Node *assign();
+Node *logor();
+Node *logand();
+Node *bitand();
+Node * bitor ();
+Node *bitxor();
 Node *equality();
 Node *relational();
 Node *add();
@@ -216,13 +224,15 @@ Program *program()
     {
         if (is_function())
         {
-            cur->next = function();
+            Function *fn = function();
+            if (!fn)
+                continue;
+            cur->next = fn;
             cur = cur->next;
+            continue;
         }
-        else
-        {
-            global_var();
-        }
+
+        global_var();
     }
 
     Program *prog = calloc(1, sizeof(Program));
@@ -231,7 +241,7 @@ Program *program()
     return prog;
 }
 
-// typespecifier = builtin-type | struct-declaration | typedef-name
+// typespecifier = builtin-type | struct-declaration | typedef-name | enum-specifier
 
 // builtin-type   = "void"
 //                | "_Bool"
@@ -242,6 +252,8 @@ Program *program()
 //
 //basetypeではtypedefで宣言された typedef int xのxも処理する
 //このときのxはただの変数ではあるが、VarScopeのtypedefにType構造体でtyがINTのやつ(stmt()のtypedefの処理の時にbasetype()から作ったやつ)が入っている
+
+//staticもここで処理
 
 Type *type_specifier()
 {
@@ -263,6 +275,7 @@ Type *type_specifier()
     Type *user_type = NULL;
 
     bool is_typedef = false;
+    bool is_static = false;
 
     for (;;)
     {
@@ -272,6 +285,10 @@ Type *type_specifier()
         { //typedefで作られた変数もここで扱うが、typedefの作成自体もここでする
             //ただここでは変数を作るだけ、変数をScopeに入れていない
             is_typedef = true;
+        }
+        else if (consume("static"))
+        {
+            is_static = true;
         }
         else if (consume("void"))
         {
@@ -302,6 +319,12 @@ Type *type_specifier()
             if (base_type || user_type)
                 break;
             user_type = struct_declaration();
+        }
+        else if (peek("enum"))
+        {
+            if (base_type || user_type)
+                break;
+            user_type = enum_specifier();
         }
         else
         {
@@ -348,6 +371,7 @@ Type *type_specifier()
     }
 
     ty->is_typedef = is_typedef;
+    ty->is_static = is_static;
     return ty;
 }
 
@@ -445,6 +469,8 @@ Type *struct_declaration()
         TagScope *sc = find_tag(tag);
         if (!sc)
             error_tok(tag, "unknown struct type"); //構造体宣言までに、tagを使うのであればTagを登録しておくこと
+        if (sc->ty->kind != TY_STRUCT)
+            error_tok(tag, "not a struct tag");
         return sc->ty;
     }
 
@@ -491,6 +517,62 @@ Type *struct_declaration()
     return ty;
 }
 
+//enum-specifier = "enum" ident
+//               | "enum" ident? "{" enum-list? "}"
+//
+//enum-list = ident ( "=" num)? ( "," ident ( "=" num )? )* ","?
+Type *enum_specifier()
+{
+    //他のやつと同様、生成と取得を同じところで行う
+    expect("enum");
+    Type *ty = enum_type();
+
+    //取得
+    Token *tag = consume_ident();
+    if (tag && !peek("{"))
+    {                                 //"enum" identの時
+        TagScope *sc = find_tag(tag); //ここに来るときはすでに登録済でなくてはいけない
+        if (!sc)
+            error_tok(tag, "unknown enum type");
+        if (sc->ty->kind != TY_ENUM)
+            error_tok(tag, "not an enum tag");
+        return sc->ty;
+    }
+
+    //生成
+    expect("{");
+
+    int cnt = 0;
+    for (;;)
+    {
+        char *name = expect_ident();
+        if (consume("="))
+            cnt = expect_number();
+
+        VarScope *sc = push_scope(name); //localとかglobalには入れずにscopeにだけ入れる
+        sc->enum_ty = ty;
+        sc->enum_val = cnt++;
+
+        if (consume(","))
+        {
+            if (consume("}"))
+                break;
+            continue;
+        }
+
+        expect("}");
+        break;
+    }
+
+    //Tagがある(identがあるなら)ならtagを追加
+    if (tag)
+    {
+        push_tag_scope(tag, ty);
+    }
+
+    return ty;
+}
+
 // struct-member = type-specifier declarator type-suffix ";"
 
 Member *struct_member()
@@ -517,8 +599,10 @@ VarList *read_func_param()
     ty = declarator(ty, &name);
     ty = type_suffix(ty);
 
+    Var *var = push_var(name, ty, true); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
+    push_scope(name)->var = var;         //scopeにも入れる
     VarList *vl = calloc(1, sizeof(VarList));
-    vl->var = push_var(name, ty, true); //引数もpush_varしているのでまとめてその関数のlocalsに入ることになる
+    vl->var = var;
     return vl;
 }
 
@@ -541,7 +625,7 @@ VarList *read_func_params()
     return head;
 }
 
-// function = type-specifier declarator "(" params?")" "{" stmt* "}"
+// function = type-specifier declarator "(" params?")" ( "{" stmt* "}" | ";" )
 // params = ident ("," ident)*
 // param  = type-specifier declarator type-suffix
 Function *function()
@@ -553,7 +637,8 @@ Function *function()
     ty = declarator(ty, &name);
 
     //Add a fuction type to the scope
-    push_var(name, func_type(ty), false);
+    Var *var = push_var(name, func_type(ty), false);
+    push_scope(name)->var = var;
 
     //Construct a function object
     Function *fn = calloc(1, sizeof(Function));
@@ -562,12 +647,16 @@ Function *function()
 
     expect("(");
     fn->params = read_func_params();
-    expect("{");
+
+    if (consume(";"))
+        return NULL; //もし関数宣言だったらprogram->fnsには追加しない、関数を変数として追加するだけ
 
     //Read function Body
     Node head;
     head.next = NULL;
     Node *cur = &head;
+
+    expect("{");
 
     while (!consume("}"))
     {
@@ -589,7 +678,8 @@ void global_var()
     ty = type_suffix(ty);
 
     expect(";");
-    push_var(name, ty, false);
+    Var *var = push_var(name, ty, false);
+    push_scope(name)->var = var;
 }
 
 // declaration = type-specifier declarator type-suffix ("=" expr)? ";"
@@ -601,7 +691,7 @@ Node *declaration()
 
     if (consume(";"))
     {
-        //basetype()の中にstruct\declarationも含まれているので,ここのifでは、
+        //basetype()の中にstruct_declarationも含まれているので,ここのifでは、
         // struct x {...};みたいなtag付けを処理する
         //int ;見たいのは絶対ないけどstructについてはこういう宣言もあるので変わってる
         return new_node(ND_NULL, tok);
@@ -625,7 +715,17 @@ Node *declaration()
         error_tok(tok, "variable declared void");
     }
 
-    Var *var = push_var(name, ty, true); //ここでstructTypeもきちんと入る
+    Var *var;
+    if (ty->is_static)
+    {
+        var = push_var(new_label(), ty, false);
+    }
+    else
+    {
+        var = push_var(name, ty, true); //ここでstructTypeもきちんと入る
+    }
+
+    push_scope(name)->var = var;
 
     if (consume(";"))
     {
@@ -648,13 +748,13 @@ Node *read_expr_stmt()
 
 bool is_typename()
 {
-    return peek("void") || peek("_Bool") || peek("char") || peek("short") || peek("int") || peek("long") || peek("struct") || peek("typedef") || find_typedef(token);
+    return peek("void") || peek("_Bool") || peek("char") || peek("short") || peek("int") || peek("long") || peek("enum") || peek("struct") || peek("typedef") || peek("static") || find_typedef(token);
 }
 
 // stmt = "return" expr ";"
 //        | "if" "(" expr ")" stmt ("else" stmt)?
 //        | "while" "(" expr ")" stmt
-//        | "for" "(" expr? ";" expr? ";" expr? ")" stmt
+//        | "for" "(" ( expr? ";" | declaration ) expr? ";" expr? ")" stmt
 //        | "{" stmt* "}"
 //        | declaration
 //        | expr ";"
@@ -700,11 +800,21 @@ Node *stmt()
         Node *node = new_node(ND_FOR, tok);
         expect("(");
 
+        VarScope *sc1 = var_scope;
+        TagScope *sc2 = tag_scope;
+
         if (!consume(";"))
         {
-            node->init = read_expr_stmt(); //i=0は式文で、スタックにpushされた値は使わないので捨てる、別に捨てなくても動くとは思うけど、alignが面倒になる?
-            //i < 0だとこの結果を捨てたくないので式
-            expect(";");
+            if (is_typename())
+            {
+                node->init = declaration();
+            }
+            else
+            {
+                node->init = read_expr_stmt(); //i=0は式文で、スタックにpushされた値は使わないので捨てる、別に捨てなくても動くとは思うけど、alignが面倒になる?
+                //i < 0だとこの結果を捨てたくないので式
+                expect(";");
+            }
         }
 
         if (!consume(";"))
@@ -719,6 +829,11 @@ Node *stmt()
             expect(")");
         }
         node->then = stmt();
+
+        //for内のint i=0;みたいな宣言したローカル変数もfor{}のBlockのみでだけいるので、scopeをもどしてあげる
+
+        var_scope = sc1;
+        tag_scope = sc2;
         return node;
     }
 
@@ -754,22 +869,106 @@ Node *stmt()
     return node;
 }
 
-//expr = assign
+//expr = assign ("," assign)*
 Node *expr()
 {
-    return assign();
+    Node *node = assign();
+    Token *tok;
+    while (tok = consume(","))
+    {
+        node = new_unary(ND_EXPR_STMT, node, node->tok);
+        node = new_binary(ND_COMMA, node, assign(), tok); //lhsをEXPR＿STMTにすることで常に最後の一つだけがスタックに積まれた状態となる
+    }
+
+    return node;
 }
 //例えばa=1;はNode(ASSIGN,left=Lvar,right=NUM)となる
 
 //この時点ではa+1=10みたいなのも作ってしまうがしょうがない
 // assign = equality ("=" assign)?//複数代入も想定しているので"="" assignとしているっぽい？
+
+// assign = logor (assign-op assign)?
+//assign-op = "=" | "+=" | "-=" | "*=" | "/="
 Node *assign()
 {
-    Node *node = equality();
+    Node *node = logor();
 
     Token *tok;
     if (tok = consume("="))
         node = new_binary(ND_ASSIGN, node, assign(), tok);
+    if (tok = consume("+="))
+        node = new_binary(ND_A_ADD, node, assign(), tok);
+    if (tok = consume("-="))
+        node = new_binary(ND_A_SUB, node, assign(), tok);
+    if (tok = consume("*="))
+        node = new_binary(ND_A_MUL, node, assign(), tok);
+    if (tok = consume("/="))
+        node = new_binary(ND_A_DIV, node, assign(), tok);
+    return node;
+}
+
+// logor = logand ( "||" logand)*
+Node *logor()
+{
+    Node *node = logand();
+    Token *tok;
+    while (tok = consume("||"))
+    {
+        node = new_binary(ND_LOGOR, node, logand(), tok);
+    }
+
+    return node;
+}
+
+// logand = bitor ( "&&" bitor )*
+Node *logand()
+{
+    Node *node = bitor ();
+    Token *tok;
+
+    while (tok = consume("&&"))
+    {
+        node = new_binary(ND_LOGAND, node, bitor (), tok);
+    }
+
+    return node;
+}
+
+//bitor = bitxor ( "|" bitxor)*
+Node * bitor ()
+{
+    Node *node = bitxor();
+    Token *tok;
+    while (tok = consume("|"))
+    {
+        node = new_binary(ND_BITOR, node, bitxor(), tok);
+    }
+
+    return node;
+}
+
+//bitxor = bitand ( "^" bitand)*
+Node *bitxor()
+{
+    Node *node = bitand();
+    Token *tok;
+    while (tok = consume("^"))
+    {
+        node = new_binary(ND_BITXOR, node, bitand(), tok);
+    }
+
+    return node;
+}
+
+//bitand = equality ( "&" equality)*
+Node *bitand()
+{
+    Node *node = equality();
+    Token *tok;
+    while (tok = consume("&"))
+    {
+        node = new_binary(ND_BITAND, node, equality(), tok);
+    }
     return node;
 }
 
@@ -866,7 +1065,9 @@ Node *cast()
     return unary();
 }
 
-//unary = ("+" | "-" | "*" | "&")? cast | postfix
+//unary = ("+" | "-" | "*" | "&" | "!" | "~" )? cast
+//        | ("++" | "--") unary
+//        | postfix
 Node *unary()
 {
     Token *tok;
@@ -887,11 +1088,27 @@ Node *unary()
     {
         return new_unary(ND_DEREF, cast(), tok);
     }
+    if (tok = consume("!"))
+    {
+        return new_unary(ND_NOT, cast(), tok);
+    }
+    if (tok = consume("~"))
+    {
+        return new_unary(ND_BITNOT, cast(), tok);
+    }
+    if (tok = consume("++"))
+    {
+        return new_unary(ND_PRE_INC, unary(), tok);
+    }
+    if (tok = consume("--"))
+    {
+        return new_unary(ND_PRE_DEC, unary(), tok);
+    }
 
     return postfix();
 }
 
-// postfix = primary ( "[" expr "]"  |  "." ident  | "->" ident)*
+// postfix = primary ( "[" expr "]"  |  "." ident  | "->" ident | "++" | "--" )*
 Node *postfix()
 {
     Node *node = primary();
@@ -926,6 +1143,18 @@ Node *postfix()
             node = new_unary(ND_DEREF, node, tok);
             node = new_unary(ND_MEMBER, node, tok);
             node->member_name = expect_ident();
+            continue;
+        }
+
+        if (tok = consume("++"))
+        {
+            node = new_unary(ND_POST_INC, node, tok);
+            continue;
+        }
+
+        if (tok = consume("--"))
+        {
+            node = new_unary(ND_POST_DEC, node, tok);
             continue;
         }
 
@@ -1057,12 +1286,15 @@ Node *primary()
 
         //普通のidentであってもint x;かint x = 5;みたいに事前に宣言されているはずなのでfind_varできなかったらエラー
         VarScope *sc = find_var(tok);
-        if (!(sc && sc->var))
-        {
-            error_tok(tok, "undefined variable");
-        }
 
-        return new_var(sc->var, tok);
+        if (sc)
+        {
+            if (sc->var)
+                return new_var(sc->var, tok);
+            if (sc->enum_ty) //enum_specifierで登録済みだったら
+                return new_num(sc->enum_val, tok);
+        }
+        error_tok(tok, "undefined variable");
     }
 
     tok = token; //primaryでnumの場合
