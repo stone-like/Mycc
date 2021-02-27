@@ -183,6 +183,8 @@ void visit(Node *node)
         node->ty = node->lhs->ty;
         return;
     case ND_ASSIGN:
+    case ND_SHL:
+    case ND_SHR:
     case ND_PRE_INC: //INC,DEC系はlhsに変数が来るはずなのでそのtypeに
     case ND_PRE_DEC:
     case ND_POST_INC:
@@ -191,7 +193,12 @@ void visit(Node *node)
     case ND_A_SUB:
     case ND_A_MUL:
     case ND_A_DIV:
+    case ND_A_SHL:
+    case ND_A_SHR:
         node->ty = node->lhs->ty;
+        return;
+    case ND_TERNARY:
+        node->ty = node->then->ty;
         return;
     case ND_COMMA:
         node->ty = node->rhs->ty;

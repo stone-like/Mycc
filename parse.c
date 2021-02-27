@@ -209,6 +209,7 @@ bool is_typename();
 Node *stmt();
 Node *expr();
 Node *assign();
+Node *conditional();
 Node *logor();
 Node *logand();
 Node *bitand();
@@ -216,6 +217,7 @@ Node * bitor ();
 Node *bitxor();
 Node *equality();
 Node *relational();
+Node *shift();
 Node *add();
 Node *mul();
 Node *cast();
@@ -1057,11 +1059,11 @@ Node *expr()
 //この時点ではa+1=10みたいなのも作ってしまうがしょうがない
 // assign = equality ("=" assign)?//複数代入も想定しているので"="" assignとしているっぽい？
 
-// assign = logor (assign-op assign)?
-//assign-op = "=" | "+=" | "-=" | "*=" | "/="
+// assign = conditional (assign-op assign)?
+//assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "<<=" | ">>="
 Node *assign()
 {
-    Node *node = logor();
+    Node *node = conditional();
 
     Token *tok;
     if (tok = consume("="))
@@ -1074,9 +1076,30 @@ Node *assign()
         node = new_binary(ND_A_MUL, node, assign(), tok);
     if (tok = consume("/="))
         node = new_binary(ND_A_DIV, node, assign(), tok);
+    if (tok = consume("<<="))
+        node = new_binary(ND_A_SHL, node, assign(), tok);
+    if (tok = consume(">>="))
+        node = new_binary(ND_A_SHR, node, assign(), tok);
     return node;
 }
 
+// conditional = logor ( "?" expr ":" condtional )?
+Node *conditional()
+{
+    Node *node = logor();
+    Token *tok = consume("?");
+    if (!tok)
+    {
+        return node;
+    }
+
+    Node *ternary = new_node(ND_TERNARY, tok);
+    ternary->cond = node;
+    ternary->then = expr();
+    expect(":");
+    ternary->els = conditional();
+    return ternary;
+}
 // logor = logand ( "||" logand)*
 Node *logor()
 {
@@ -1158,25 +1181,48 @@ Node *equality()
     }
 }
 
-// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+// relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
 
 Node *relational()
+{
+    Node *node = shift();
+    Token *tok;
+
+    for (;;)
+    {
+        if (tok = consume("<"))
+            node = new_binary(ND_LT, node, shift(), tok);
+        else if (tok = consume("<="))
+            node = new_binary(ND_LE, node, shift(), tok);
+        else if (tok = consume(">"))
+            node = new_binary(ND_LT, shift(), node, tok); //逆にして対応する
+        else if (tok = consume(">="))
+            node = new_binary(ND_LE, shift(), node, tok);
+        else
+            return node;
+    }
+}
+
+// shift = add ( "<<" add | ">>" add)*
+Node *shift()
 {
     Node *node = add();
     Token *tok;
 
     for (;;)
     {
-        if (tok = consume("<"))
-            node = new_binary(ND_LT, node, add(), tok);
-        else if (tok = consume("<="))
-            node = new_binary(ND_LE, node, add(), tok);
-        else if (tok = consume(">"))
-            node = new_binary(ND_LT, add(), node, tok); //逆にして対応する
-        else if (tok = consume(">="))
-            node = new_binary(ND_LE, add(), node, tok);
+        if (tok = consume("<<"))
+        {
+            node = new_binary(ND_SHL, node, add(), tok);
+        }
+        else if (tok = consume(">>"))
+        {
+            node = new_binary(ND_SHR, node, add(), tok);
+        }
         else
+        {
             return node;
+        }
     }
 }
 

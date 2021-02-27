@@ -210,6 +210,21 @@ void gen(Node *node)
         gen(node->rhs);
         store(node->ty);
         return;
+    case ND_TERNARY:
+    {
+        int seq = labelseq++;
+        gen(node->cond);
+        printf("   pop rax\n");
+        printf("   cmp rax, 0\n");
+        printf("   je .Lelse%d\n", seq);
+        gen(node->then);
+        printf("   jmp .Lend%d\n", seq);
+        printf(".Lelse%d:\n", seq);
+        gen(node->els);
+        printf(".Lend%d:\n", seq);
+        return;
+    }
+
     case ND_PRE_INC:
         gen_lval(node->lhs);
         printf("   push [rsp]\n"); //この時点ではスタックに 同じ変数のアドレスを二個積んでいる
@@ -244,6 +259,8 @@ void gen(Node *node)
     case ND_A_SUB:
     case ND_A_MUL:
     case ND_A_DIV:
+    case ND_A_SHL:
+    case ND_A_SHR:
     {
         gen_lval(node->lhs);
         printf("   push [rsp]\n");
@@ -271,10 +288,18 @@ void gen(Node *node)
             printf("  cqo\n");
             printf("  idiv rdi\n");
             break;
+        case ND_A_SHL:
+            printf("   mov cl,dil\n");
+            printf("   shl rax,cl\n");
+            break;
+        case ND_A_SHR:
+            printf("   mov cl,dil\n");
+            printf("   sar rax, cl\n");
+            break;
         }
 
-        printf("   push rax\n"); //ここまでで変数のアドレス,計算結果の値が順にスタックに積まれているのであとはstoreする
-        store(node->ty);
+        printf("   push rax\n");
+        store(node->ty); //ここまでで変数のアドレス,計算結果の値が順にスタックに積まれているのであとはstoreする
         return;
     }
 
@@ -531,7 +556,11 @@ void gen(Node *node)
         printf(".Lend%d:\n", seq);
         printf("   push rax\n"); //返り値がraxに入っているので
 
-        truncate(node->ty);
+        if (node->ty->kind != TY_VOID)
+        {
+            truncate(node->ty);
+        }
+
         return;
     }
 
@@ -598,6 +627,14 @@ void gen(Node *node)
         break;
     case ND_BITXOR:
         printf("  xor rax, rdi\n");
+        break;
+    case ND_SHL:
+        printf("   mov cl, dil\n");
+        printf("   shl rax, cl\n");
+        break;
+    case ND_SHR:
+        printf("   mov cl, dil\n");
+        printf("   sar rax, cl\n");
         break;
     case ND_EQ:
         printf("  cmp rax, rdi\n");

@@ -180,7 +180,7 @@ char *starts_with_reserved(char *p)
     }
 
     //MultiLetter pinctuator
-    static char *ops[] = {"==", "!=", "<=", ">=", "->", "++", "--", "+=", "-=", "*=", "/=", "&&", "||"};
+    static char *ops[] = {"<<=", ">>=", "==", "!=", "<=", ">=", "->", "++", "--", ">>", "<<", "+=", "-=", "*=", "/=", "&&", "||"};
 
     for (int i = 0; i < sizeof(ops) / sizeof(*ops); i++)
     {
@@ -339,7 +339,7 @@ Token *tokenize()
         }
 
         // Single-letter punctuator
-        if (strchr("+-*/()<>;={},&[].,!~|^:", *p))
+        if (strchr("+-*/()<>;={},&[].,!~|^:?", *p))
         {
             cur = new_token(TK_RESERVED, cur, p++, 1);
             continue;
