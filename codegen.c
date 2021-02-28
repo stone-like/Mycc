@@ -671,16 +671,31 @@ void emit_data(Program *prog)
         Var *var = vl->var;
         printf("%s:\n", var->name);
 
-        if (!var->contents)
+        if (!var->initializer)
         {
             //""みたいに空Stringだったら
             printf("   .zero %d\n", size_of(var->ty, var->tok));
             continue;
         }
 
-        for (int i = 0; i < var->count_len; i++)
+        //文字列"abc"の場合だったらここのvar->initializer=["a","b","c"]となっている
+        //そして.quad a .quad b .quad cとなる
+        for (Initializer *init = var->initializer; init; init = init->next)
         {
-            printf("   .byte %d\n", var->contents[i]);
+            if (init->label)
+            {
+                printf("   .quad %s\n", init->label); //labelの場合は文字列をそのまま書けばいい
+                continue;
+            }
+
+            if (init->sz == 1)
+            { //何byteかによって.byteの部分を変える
+                printf("   .byte %ld\n", init->val);
+            }
+            else
+            {
+                printf("   .%dbyte %ld\n", init->sz, init->val);
+            }
         }
     }
 }

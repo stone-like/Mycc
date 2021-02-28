@@ -208,6 +208,7 @@ Node *declaration();
 bool is_typename();
 Node *stmt();
 Node *expr();
+long eval(Node *node);
 long const_expr();
 Node *assign();
 Node *conditional();
@@ -777,7 +778,92 @@ void expect_end()
     expect("}"); //初期化は}か,}で終わるのでここでチェック
 }
 
-//global-var = type-specifier declarator type-suffix ";"
+Initializer *new_init_val(Initializer *cur, int sz, int val)
+{
+    Initializer *init = calloc(1, sizeof(Initializer));
+    init->sz = sz;
+    init->val = val;
+    cur->next = init;
+    return init;
+}
+
+Initializer *new_init_label(Initializer *cur, char *label)
+{
+    Initializer *init = calloc(1, sizeof(Initializer));
+    init->label = label;
+    cur->next = init;
+    return init;
+}
+
+Initializer *gvar_init_string(char *p, int len)
+{
+    Initializer head;
+    head.next = NULL;
+    Initializer *cur = &head;
+    for (int i = 0; i < len; i++)
+    {
+        cur = new_init_val(cur, 1, p[i]); //文字列に対して、1文字ずつここを呼んでいる
+    }
+
+    return head.next;
+}
+
+// Global variableはconst_exprか他のglobalVariableへのポインタでのみ初期化可能
+Initializer *gvar_initializer(Initializer *cur, Type *ty)
+{
+    Token *tok = token;
+    Node *expr = conditional();
+
+    if (expr->kind == ND_ADDR)
+    {
+        if (expr->lhs->kind != ND_VAR)
+        {
+            error_tok(tok, "invalid initializer");
+        }
+
+        return new_init_label(cur, expr->lhs->var->name);
+    }
+
+    if (expr->kind == ND_VAR && expr->var->ty->kind == TY_ARRAY)
+    {
+        //上のexpr = conditional()でprimary()の
+        //
+        // if (tok->kind == TK_STR)
+        // {
+
+        //     token = token->next; //これはただ次のtokenに行くだけ
+
+        //     Type *ty = array_of(char_type(), tok->count_len);
+        //     Var *var = push_var(new_label(), ty, false, NULL); //これもグローバルに含まれる
+
+        //     var->initializer = gvar_init_string(tok->contents, tok->count_len);
+
+        //     return new_var(var, tok);
+        // }を呼んで、その中のpush_varでnew_label()から名前は登録済み,new_labelで作られた名前は.L.data.0みたいな名前になる,ここのvarはg8じゃなくて右辺、newlabel,"abc"のことなのがややこしい,右辺も左辺も変数というのがややこしいところ
+        //push_varでglobalに送られるのはg8と.L.data.0で.L.data.0の方が後に送られるのでcodegenでは先に回ってくる
+
+        //まとめると最終形は
+        // .L.data.0 :
+        // 　　　　　　　.byte 97
+        //              .byte 98
+        //              .byte 99
+        //              .byte 0
+        // g8 :
+        //              .quad .L.data .0
+        ///こうなる
+        //.L.data.0の部分は　g8 = "abc"の = より後から作られる（global_var()のgvar_initializerから）
+        //g8の部分はglobal_varのpush_varまで、
+        // そしてg8のinitializerに。L.data.0のラベルが入る、ちょうど下記↓
+        return new_init_label(cur, expr->var->name);
+    }
+
+    //上記までが他のglobalVariableへのポインタの場合(それか配列)
+
+    //ここからはconst_exprの場合 const_exprとは g1 = 1+1 とかg1 = 1みたいなやつ,どちらにせよevalで値そのものがnew_init_valに送られる
+    return new_init_val(cur, size_of(ty, token), eval(expr));
+}
+
+//global-var = type-specifier declarator type-suffix ( "=" gvar-initializer )? ";"
 void global_var()
 {
     Type *ty = type_specifier();
@@ -786,9 +872,18 @@ void global_var()
     ty = declarator(ty, &name);
     ty = type_suffix(ty);
 
-    expect(";");
-    Var *var = push_var(name, ty, false, tok);
+    Var *var = push_var(name, ty, false, tok); // g8 = "abc"みたいな例だったらここのnameはg8
     push_scope(name)->var = var;
+
+    if (consume("="))
+    {
+        Initializer head;
+        head.next = NULL;
+        gvar_initializer(&head, ty);
+        var->initializer = head.next; //var->name = g8のinitializerに
+    }
+
+    expect(";");
 }
 
 typedef struct Designator Designator;
@@ -1796,8 +1891,8 @@ Node *primary()
 
         Type *ty = array_of(char_type(), tok->count_len);
         Var *var = push_var(new_label(), ty, false, NULL);
-        var->contents = tok->contents;
-        var->count_len = tok->count_len;
+
+        var->initializer = gvar_init_string(tok->contents, tok->count_len);
 
         return new_var(var, tok);
     }
