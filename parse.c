@@ -797,6 +797,7 @@ struct Designator
 {
     Designator *next;
     int index;
+    Member *mem; //struct
 };
 
 Node *create_array_access(Var *var, Designator *desg)
@@ -810,6 +811,15 @@ Node *create_array_access(Var *var, Designator *desg)
     //例えばx[1]で、desg={NULL,1}とすると,
     //下のcreate_array_accessで。desg->next=NULLとなり、new_varが返る
     Node *node = create_array_access(var, desg->next);
+
+    //構造体の場合
+    if (desg->mem)
+    {
+        node = new_unary(ND_MEMBER, node, desg->mem->tok);
+        node->member_name = desg->mem->name;
+        return node;
+    }
+
     node = new_binary(ND_ADD, node, new_num(desg->index, tok), tok); //index分アドレスに足す,codegenではADDでvarとnumを足すことになる、varはgenでgenAddrに送られるので結局変数のアドレス+indexとなる
 
     //ここのND_ADDは*(*(x+0)+1)なんだけど、
@@ -825,11 +835,73 @@ Node *assign_array_to_value(Var *var, Designator *desg, Node *rhs)
     return new_unary(ND_EXPR_STMT, node, rhs->tok);         //値を入れることだけ目的で、その値を他の何かで使わないのでEXPR_STMR(condとかだったらcmpで使うのでExprにしなきゃいけないけど)
 }
 
+Node *lvar_init_zero(Node *cur, Var *var, Type *ty, Designator *desg)
+{
+    if (ty->kind == TY_ARRAY)
+    { //例えばint x[2][3] = {{1,2,3} , }で[2]部分のレベルで配列が丸ごと一個分足りないときがここ
+        // そのときは[1][?]は全部０にする
+        for (int i = 0; i < ty->array_size; i++)
+        {
+            Designator desg2 = {desg, i++, NULL};
+            cur = lvar_init_zero(cur, var, ty->base, &desg2);
+        }
+
+        return cur;
+    }
+
+    //ここは配列の一番下のレベルx[2][3]だったら[3]部分
+
+    cur->next = assign_array_to_value(var, desg, new_num(0, token)); //0埋め
+    return cur->next;
+}
+
 // lvar-initilaize = assign ただのassignの場合もある
 //                   | "{" lvar-initializer ( "," lvar-initializer)* ","? "}"
+// char x[4] = "foo"みたいなcharの配列をstringで初期化する場合、
+// char x[4] = { 'f','o','o','\0'}とこちらで変えてあげればいい
+
+//もし左辺が不完全系配列だったら、右辺のサイズを読み取って完全系にしてあげる
+//int x[] = {1,2,3}なら int x[3]としてあげる
+
+//構造体の場合は、
+//struct { int a; int b; } x = { 1,2 }だったら　x.a = 1 x.b = 2としてあげればいい
 
 Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
 {
+    if (ty->kind == TY_ARRAY && ty->base->kind == TY_CHAR && token->kind == TK_STR)
+    {
+        Token *tok = token;
+        token = token->next;
+
+        //不完全系だった場合
+        if (ty->is_incomplete)
+        {
+            ty->array_size = tok->count_len;
+            ty->is_incomplete = false;
+        }
+
+        int len = (ty->array_size < tok->count_len) ? ty->array_size : tok->count_len;
+        //lenはどちらか小さい方に合わせる,char x[4] = "fooooooo\0" だったら4で,char x[4] = "f"だったらfとして、残りは0埋め
+        int i;
+
+        for (i = 0; i < len; i++)
+        {
+            Designator desg2 = {desg, i, NULL};
+            Node *rhs = new_num(tok->contents[i], tok);          //charはnum扱いなので
+            cur->next = assign_array_to_value(var, &desg2, rhs); //*(x+0) = 'f'みたいになる
+            cur = cur->next;
+        }
+
+        //ここからは0埋め
+        for (; i < ty->array_size; i++)
+        {
+            Designator desg2 = {desg, i, NULL};
+            cur = lvar_init_zero(cur, var, ty->base, &desg2);
+        }
+
+        return cur;
+    }
+
     Token *tok = consume("{");
     if (!tok)
     {
@@ -843,11 +915,53 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
 
         do
         {
-            Designator desg2 = {desg, i++}; //desgはarrayAccess用に使う
+            Designator desg2 = {desg, i++, NULL}; //desgはarrayAccess用に使う
             cur = lvar_initializer(cur, var, ty->base, &desg2);
         } while (!peek_end() && consume(","));
 
         expect_end();
+
+        //もし初期化の時に初期化要素数が型より不足していたら
+        //例として、int x[2][3]={{1,2}}の時は,まず{1,2}のレベルだと,上のdoWhileの終了時はi=2となっているはずで、tyはarrayof(int,3)
+        //なので、あと1配列が足りないのでそこを0埋め
+        // { {1,2} , ... , }のレベルでは、終了時 i = 1となり、tyはarrayof(arrayof(int,3),2)
+        //であと一個足りないのでそこを0埋め
+        while (i < ty->array_size)
+        {
+
+            Designator desg2 = {desg, i++, NULL};
+            cur = lvar_init_zero(cur, var, ty->base, &desg2);
+        }
+
+        if (ty->is_incomplete)
+        {
+            ty->array_size = i; //こうすることで配列のサイズ計算の時でもうまく出来るようになり、offset,sizeofもできるようになる
+            ty->is_incomplete = false;
+        }
+
+        return cur;
+    }
+
+    if (ty->kind == TY_STRUCT)
+    {
+        Member *mem = ty->members;
+
+        do
+        {
+            Designator desg2 = {desg, 0, mem};
+            //構造体のmemberに対して値を割り当てていく
+            cur = lvar_initializer(cur, var, mem->ty, &desg2);
+            mem = mem->next;
+        } while (!peek_end() && consume(","));
+
+        expect_end();
+
+        //0埋め
+        for (; mem; mem = mem->next)
+        {
+            Designator desg2 = {desg, 0, mem};
+            cur = lvar_init_zero(cur, var, mem->ty, &desg2);
+        }
 
         return cur;
     }
