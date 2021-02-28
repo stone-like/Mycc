@@ -769,13 +769,13 @@ bool peek_end()
     return ret;
 }
 
-void expect_end()
+bool consume_end()
 {
     Token *tok = token;
-    if (consume(",") && consume("}"))
-        return;
+    if (consume("}") || consume(",") && consume("}"))
+        return true; //初期化は}か,}で終わるのでここでチェック
     token = tok;
-    expect("}"); //初期化は}か,}で終わるのでここでチェック
+    return false;
 }
 
 Initializer *new_init_val(Initializer *cur, int sz, int val)
@@ -852,10 +852,69 @@ Initializer *emit_struct_padding(Initializer *cur, Type *parent, Member *mem)
     return cur;
 }
 
+void skip_excess_element2()
+{
+    for (;;)
+    {
+        if (consume("{"))
+        {
+            skip_excess_element2();
+        }
+        else
+        {
+            assign();
+        }
+
+        if (consume_end())
+        {
+            return;
+        }
+
+        expect(",");
+    }
+}
+
+void skip_excess_elements()
+{
+    expect(",");
+    warn_tok(token, "excesss elements in initializer");
+    skip_excess_element2();
+}
+
 // Global variableはconst_exprか他のglobalVariableへのポインタでのみ初期化可能
 Initializer *gvar_initializer(Initializer *cur, Type *ty)
 {
     Token *tok = token;
+    // char *g8 = "abc";ではなく、char g19[3] = "foobar";みたいに配列になると挙動が↓になるので注意,ポインタの時は"abc"にラベルを作って、g8ではそのラベルにアクセスしたが、
+    //配列の時はg19自身が値を持つ
+    //     g17:
+    //    .byte 102
+    //    .byte 111
+    //    .byte 111
+    //    .byte 98
+    //    .byte 97
+    //    .byte 114
+    //    .byte 0
+
+    if (ty->kind == TY_ARRAY && ty->base->kind == TY_CHAR && token->kind == TK_STR)
+    {
+        token = token->next;
+
+        if (ty->is_incomplete)
+        {
+            ty->array_size = tok->count_len;
+            ty->is_incomplete = false;
+        }
+
+        int len = (ty->array_size < tok->count_len) ? ty->array_size : tok->count_len;
+
+        for (int i = 0; i < len; i++)
+        {
+            cur = new_init_val(cur, 1, tok->contents[i]);
+        }
+
+        return new_init_zero(cur, ty->array_size - len);
+    }
 
     //g8 = "abc"の場合はg8から""abc"のラベルを作ってアクセスするようにしたが.
     //g9[3] = {0, 1, 2}の場合は
@@ -880,9 +939,9 @@ Initializer *gvar_initializer(Initializer *cur, Type *ty)
         //ここでlimitを設けるのは例えばint x[2][3]={0,1,2,3,4,5,};でこのままだと一次元配列になってしまうので,最初にgvar_initに入った時のtyはarrayOf(arraOf(int,3),2)なので、
         //limitは2となる、なのでループ回数上限は二回,ようは、自分で{{0,1,2},{3,4,5}}と{}を作る代わりの動きをしている
 
-        if (isOpen)
+        if (isOpen && !consume_end())
         {
-            expect_end();
+            skip_excess_elements();
         }
 
         //0埋め
@@ -913,9 +972,9 @@ Initializer *gvar_initializer(Initializer *cur, Type *ty)
         //構造体の場合は{ struct {int a; int b;} x[2]={0,1,2,3};だったら
         //構造体のメンバーの数をループ上限とすればいい
 
-        if (isOpen)
+        if (isOpen && !consume_end())
         {
-            expect_end();
+            skip_excess_elements();
         }
 
         //0埋め
@@ -967,7 +1026,7 @@ Initializer *gvar_initializer(Initializer *cur, Type *ty)
         // }を呼んで、その中のpush_varでnew_label()から名前は登録済み,new_labelで作られた名前は.L.data.0みたいな名前になる,ここのvarはg8じゃなくて右辺、newlabel,"abc"のことなのがややこしい,右辺も左辺も変数というのがややこしいところ
         //push_varでglobalに送られるのはg8と.L.data.0で.L.data.0の方が後に送られるのでcodegenでは先に回ってくる
 
-        //まとめると最終形は
+        //まとめると最終形は char *g8 = "abc";
         // .L.data.0 :
         // 　　　　　　　.byte 97
         //              .byte 98
@@ -1134,9 +1193,9 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
             cur = lvar_initializer(cur, var, ty->base, &desg2);
         } while (i < limit && !peek_end() && consume(","));
 
-        if (isOpen)
+        if (isOpen && !consume_end())
         {
-            expect_end();
+            skip_excess_elements();
         }
 
         //もし初期化の時に初期化要素数が型より不足していたら
@@ -1173,9 +1232,9 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
             mem = mem->next;
         } while (mem && !peek_end() && consume(","));
 
-        if (isOpen)
+        if (isOpen && !consume_end())
         {
-            expect_end();
+            skip_excess_elements();
         }
 
         //0埋め
