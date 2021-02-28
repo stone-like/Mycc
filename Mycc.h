@@ -200,6 +200,7 @@ struct Initializer
 
     //Reference to another global variable
     char *label;
+    long addend; // char *g20 =g17 + 3;みたいな初期化の方式で使う
 };
 
 typedef struct Function Function;

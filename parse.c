@@ -209,6 +209,7 @@ bool is_typename();
 Node *stmt();
 Node *expr();
 long eval(Node *node);
+long eval2(Node *node, Var **var);
 long const_expr();
 Node *assign();
 Node *conditional();
@@ -787,10 +788,11 @@ Initializer *new_init_val(Initializer *cur, int sz, int val)
     return init;
 }
 
-Initializer *new_init_label(Initializer *cur, char *label)
+Initializer *new_init_label(Initializer *cur, char *label, long addend)
 {
     Initializer *init = calloc(1, sizeof(Initializer));
     init->label = label;
+    init->addend = addend;
     cur->next = init;
     return init;
 }
@@ -998,52 +1000,46 @@ Initializer *gvar_initializer(Initializer *cur, Type *ty)
         expect("}");
     }
 
-    if (expr->kind == ND_ADDR)
-    {
-        if (expr->lhs->kind != ND_VAR)
-        {
-            error_tok(tok, "invalid initializer");
-        }
+    //上のexpr = conditional()でprimary()の
+    //
+    // if (tok->kind == TK_STR)
+    // {
 
-        return new_init_label(cur, expr->lhs->var->name);
-    }
+    //     token = token->next; //これはただ次のtokenに行くだけ
 
-    if (expr->kind == ND_VAR && expr->var->ty->kind == TY_ARRAY)
-    {
-        //上のexpr = conditional()でprimary()の
-        //
-        // if (tok->kind == TK_STR)
-        // {
+    //     Type *ty = array_of(char_type(), tok->count_len);
+    //     Var *var = push_var(new_label(), ty, false, NULL); //これもグローバルに含まれる
 
-        //     token = token->next; //これはただ次のtokenに行くだけ
+    //     var->initializer = gvar_init_string(tok->contents, tok->count_len);
 
-        //     Type *ty = array_of(char_type(), tok->count_len);
-        //     Var *var = push_var(new_label(), ty, false, NULL); //これもグローバルに含まれる
+    //     return new_var(var, tok);
+    // }を呼んで、その中のpush_varでnew_label()から名前は登録済み,new_labelで作られた名前は.L.data.0みたいな名前になる,ここのvarはg8じゃなくて右辺、newlabel,"abc"のことなのがややこしい,右辺も左辺も変数というのがややこしいところ
+    //push_varでglobalに送られるのはg8と.L.data.0で.L.data.0の方が後に送られるのでcodegenでは先に回ってくる
 
-        //     var->initializer = gvar_init_string(tok->contents, tok->count_len);
-
-        //     return new_var(var, tok);
-        // }を呼んで、その中のpush_varでnew_label()から名前は登録済み,new_labelで作られた名前は.L.data.0みたいな名前になる,ここのvarはg8じゃなくて右辺、newlabel,"abc"のことなのがややこしい,右辺も左辺も変数というのがややこしいところ
-        //push_varでglobalに送られるのはg8と.L.data.0で.L.data.0の方が後に送られるのでcodegenでは先に回ってくる
-
-        //まとめると最終形は char *g8 = "abc";
-        // .L.data.0 :
-        // 　　　　　　　.byte 97
-        //              .byte 98
-        //              .byte 99
-        //              .byte 0
-        // g8 :
-        //              .quad .L.data .0
-        ///こうなる
-        //.L.data.0の部分は　g8 = "abc"の = より後から作られる（global_var()のgvar_initializerから）
-        //g8の部分はglobal_varのpush_varまで、
-        // そしてg8のinitializerに。L.data.0のラベルが入る、ちょうど下記↓
-        return new_init_label(cur, expr->var->name);
-    }
+    //まとめると最終形は char *g8 = "abc";
+    // .L.data.0 :
+    // 　　　　　　　.byte 97
+    //              .byte 98
+    //              .byte 99
+    //              .byte 0
+    // g8 :
+    //              .quad .L.data .0
+    ///こうなる
+    //.L.data.0の部分は　g8 = "abc"の = より後から作られる（global_var()のgvar_initializerから）
+    //g8の部分はglobal_varのpush_varまで、
+    // そしてg8のinitializerに。L.data.0のラベルが入る、ちょうど下記↓
 
     //上記までが他のglobalVariableへのポインタの場合(それか配列)
 
     //ここからはconst_exprの場合 const_exprとは g1 = 1+1 とかg1 = 1みたいなやつ,どちらにせよevalで値そのものがnew_init_valに送られる
+
+    Var *var = NULL;
+    long addend = eval2(expr, &var);
+
+    if (var)
+    {
+        return new_init_label(cur, var->name, addend);
+    }
     return new_init_val(cur, size_of(ty, token), eval(expr));
 }
 
@@ -1560,14 +1556,25 @@ Node *expr()
 
 long eval(Node *node)
 {
+    return eval2(node, NULL);
     //const_exprからevalで評価できるのは計算系に限る、例えばND_IFとかを渡してもダメ
     // case if(){} :みたいなのはダメ、ただ三項演算子はOK case x ? 1 : 0 :{}
+}
+
+long eval2(Node *node, Var **var)
+{
     switch (node->kind)
     {
     case ND_ADD:
-        return eval(node->lhs) + eval(node->rhs);
+    {
+        long lhs = eval2(node->lhs, var);
+        return lhs + eval2(node->rhs, var);
+    }
     case ND_SUB:
-        return eval(node->lhs) - eval(node->rhs);
+    {
+        long lhs = eval2(node->lhs, var);
+        return lhs - eval(node->rhs);
+    }
     case ND_MUL:
         return eval(node->lhs) * eval(node->rhs);
     case ND_DIV:
@@ -1604,8 +1611,21 @@ long eval(Node *node)
         return eval(node->lhs) || eval(node->rhs);
     case ND_NUM:
         return node->val;
+    case ND_ADDR:
+    {
+        //ここの*varの条件はもうすでに*varへ値がセットされているかを確かめている、セットされていない想定で、*var = node->lhs->var;を実行したい
+        if (!var || *var || node->lhs->kind != ND_VAR)
+            error_tok(node->tok, "invalid initializer");
+        *var = node->lhs->var;
+        return 0; //このreturn0はaddendのために使う、ADDRとVARはそこから＋するという意味で０
     }
 
+    case ND_VAR:
+        if (!var || *var || node->var->ty->kind != TY_ARRAY)
+            error_tok(node->tok, "invalid initializer");
+        *var = node->var;
+        return 0;
+    }
     error_tok(node->tok, "not a constant expression");
 }
 

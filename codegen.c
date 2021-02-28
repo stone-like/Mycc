@@ -684,7 +684,19 @@ void emit_data(Program *prog)
         {
             if (init->label)
             {
-                printf("   .quad %s\n", init->label); //labelの場合は文字列をそのまま書けばいい
+                printf("   .quad %s%+ld\n", init->label, init->addend); //labelの場合は文字列をそのまま書けばいい
+                //char g17[] = "foobar";
+                //char *g21 = g17+3;だとしたら
+                // g21:
+                //    .quad g17+3
+                // g17:
+                //    .byte 102
+                //    .byte 111
+                //    .byte 111
+                //    .byte 98
+                //    .byte 97
+                //    .byte 114
+                //    .byte 0 となる
                 continue;
             }
 

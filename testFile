@@ -4,5 +4,6 @@
 
 
 
-char g17[] = "foobar";
-int main() { return g17[1]; }
+int g23=3;
+int *g24=&g23;
+int main() { return *g24; }
