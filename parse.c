@@ -864,67 +864,80 @@ Initializer *gvar_initializer(Initializer *cur, Type *ty)
     //    .4byte 1
     //    .4byte 2
     //となる
-    if (consume("{"))
+
+    if (ty->kind == TY_ARRAY)
     {
-        if (ty->kind == TY_ARRAY)
+        //{}を使わなくても初期化できるようにしたので
+        bool isOpen = consume("{");
+        int i = 0;
+        int limit = ty->is_incomplete ? INT_MAX : ty->array_size;
+
+        do
         {
-            int i = 0;
+            cur = gvar_initializer(cur, ty->base);
+            i++;
+        } while (i < limit && !peek_end() && consume(","));
+        //ここでlimitを設けるのは例えばint x[2][3]={0,1,2,3,4,5,};でこのままだと一次元配列になってしまうので,最初にgvar_initに入った時のtyはarrayOf(arraOf(int,3),2)なので、
+        //limitは2となる、なのでループ回数上限は二回,ようは、自分で{{0,1,2},{3,4,5}}と{}を作る代わりの動きをしている
 
-            do
-            {
-                cur = gvar_initializer(cur, ty->base);
-                i++;
-            } while (!peek_end() && consume(","));
-
+        if (isOpen)
+        {
             expect_end();
-
-            //0埋め
-            if (i < ty->array_size)
-            {
-                cur = new_init_zero(cur, size_of(ty->base, tok) * (ty->array_size - i));
-            }
-
-            if (ty->is_incomplete)
-            {
-                ty->array_size = i;
-                ty->is_incomplete = false;
-            }
-
-            return cur;
         }
 
-        if (ty->kind == TY_STRUCT)
+        //0埋め
+        cur = new_init_zero(cur, size_of(ty->base, tok) * (ty->array_size - i));
+
+        if (ty->is_incomplete)
         {
-            Member *mem = ty->members;
-
-            do
-            {
-                cur = gvar_initializer(cur, mem->ty);
-                //例えばstruct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};だったら
-                // {1,2}の1を処理して帰ってきたときにemit_struct_paddingをしてcharをintに合わせる
-                cur = emit_struct_padding(cur, ty, mem);
-                mem = mem->next;
-            } while (!peek_end() && consume(","));
-
-            expect_end();
-
-            //0埋め
-            if (mem)
-            {
-                int sz = size_of(ty, tok) - mem->offset;
-                if (sz)
-                {
-                    cur = new_init_zero(cur, sz);
-                }
-            }
-
-            return cur;
+            ty->array_size = i;
+            ty->is_incomplete = false;
         }
 
-        error_tok(tok, "invalid initializer");
+        return cur;
     }
 
+    if (ty->kind == TY_STRUCT)
+    {
+        bool isOpen = consume("{");
+        Member *mem = ty->members;
+
+        do
+        {
+            cur = gvar_initializer(cur, mem->ty);
+            //例えばstruct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};だったら
+            // {1,2}の1を処理して帰ってきたときにemit_struct_paddingをしてcharをintに合わせる
+            cur = emit_struct_padding(cur, ty, mem);
+            mem = mem->next;
+        } while (mem && !peek_end() && consume(","));
+        //構造体の場合は{ struct {int a; int b;} x[2]={0,1,2,3};だったら
+        //構造体のメンバーの数をループ上限とすればいい
+
+        if (isOpen)
+        {
+            expect_end();
+        }
+
+        //0埋め
+        if (mem)
+        {
+            int sz = size_of(ty, tok) - mem->offset;
+            if (sz)
+            {
+                cur = new_init_zero(cur, sz);
+            }
+        }
+        return cur;
+    }
+
+    bool isOpen = consume("{");
+
     Node *expr = conditional();
+
+    if (isOpen)
+    {
+        expect("}");
+    }
 
     if (expr->kind == ND_ADDR)
     {
@@ -1109,24 +1122,22 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
         return cur;
     }
 
-    Token *tok = consume("{");
-    if (!tok)
-    {
-        cur->next = assign_array_to_value(var, desg, assign()); //ここで*(*(x+0)+1) = 1みたいなのをを作る
-        return cur->next;
-    }
-
     if (ty->kind == TY_ARRAY)
     {
+        bool isOpen = consume("{");
         int i = 0;
+        int limit = ty->is_incomplete ? INT_MAX : ty->array_size;
 
         do
         {
             Designator desg2 = {desg, i++, NULL}; //desgはarrayAccess用に使う
             cur = lvar_initializer(cur, var, ty->base, &desg2);
-        } while (!peek_end() && consume(","));
+        } while (i < limit && !peek_end() && consume(","));
 
-        expect_end();
+        if (isOpen)
+        {
+            expect_end();
+        }
 
         //もし初期化の時に初期化要素数が型より不足していたら
         //例として、int x[2][3]={{1,2}}の時は,まず{1,2}のレベルだと,上のdoWhileの終了時はi=2となっているはずで、tyはarrayof(int,3)
@@ -1151,6 +1162,7 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
 
     if (ty->kind == TY_STRUCT)
     {
+        bool isOpen = consume("{");
         Member *mem = ty->members;
 
         do
@@ -1159,9 +1171,12 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
             //構造体のmemberに対して値を割り当てていく
             cur = lvar_initializer(cur, var, mem->ty, &desg2);
             mem = mem->next;
-        } while (!peek_end() && consume(","));
+        } while (mem && !peek_end() && consume(","));
 
-        expect_end();
+        if (isOpen)
+        {
+            expect_end();
+        }
 
         //0埋め
         for (; mem; mem = mem->next)
@@ -1175,7 +1190,13 @@ Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
 
     //このcurのnextには *(*(x+0)+1) = 1みたいな初期化が配列の分だけ入る(0初期化も含めて)
 
-    error_tok(tok, "invalid array initializer");
+    bool isOpen = consume("{");
+    cur->next = assign_array_to_value(var, desg, assign()); //ここで*(*(x+0)+1) = 1みたいなのをを作る
+    if (isOpen)
+    {
+        expect("}");
+    }
+    return cur->next;
 }
 
 // declaration = type-specifier declarator type-suffix ("=" lvar-initializer)? ";"

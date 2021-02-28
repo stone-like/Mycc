@@ -3,5 +3,5 @@
 //それがgccでリンクされているから以下のコードで関数定義していないはずのprintfが使えた
 
 
-struct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};
-int main() { return g11[1].a; }
+int x[2][]={0,1,2,3,4,5,};
+int main() { return x[1][3]; }
