@@ -592,6 +592,7 @@ void gen(Node *node)
     //    ret
     //までで終わりだから、なんかコード的にSQLInjectionっぽいけど
 
+    //以下は計算のケースなので、
     //ここから左右の値を使う
 
     gen(node->lhs);

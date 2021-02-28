@@ -240,7 +240,7 @@ void visit(Node *node)
         if (!node->lhs->ty->base) // * &aの時、*のタイプはaのタイプになる、つまり*&aを計算した最終的な値の型ということでいい？
                                   //* の後には必ず何らかの形でアドレスが来なくてはいけない
             error_tok(node->tok, "invalid pointer dereference");
-        node->ty = node->lhs->ty->base;
+        node->ty = node->lhs->ty->base; //ここが重要
 
         if (node->ty->kind == TY_VOID)
         {

@@ -208,6 +208,7 @@ Node *declaration();
 bool is_typename();
 Node *stmt();
 Node *expr();
+long const_expr();
 Node *assign();
 Node *conditional();
 Node *logor();
@@ -453,7 +454,8 @@ Type *abstract_declarator(Type *ty)
     return type_suffix(ty);
 }
 
-// type-suffix = ( "[" num? "]" type-suffix)?
+// type-suffix = ( "[" const-expr? "]" type-suffix)?
+//const-exprを使うことによって、[1]だけでなく、[1+1+2]みたいなのもできる
 Type *type_suffix(Type *ty)
 {
     if (!consume("["))
@@ -464,8 +466,8 @@ Type *type_suffix(Type *ty)
     bool is_incomplete = true;
     if (!consume("]"))
     {
-        //数字が書いてあって完全系なら
-        sz = expect_number();
+
+        sz = const_expr(); //例えば1+1ならconst_exprで計算されて２が入る
         is_incomplete = false;
         expect("]");
     }
@@ -595,7 +597,9 @@ Type *struct_declaration()
 //enum-specifier = "enum" ident
 //               | "enum" ident? "{" enum-list? "}"
 //
-//enum-list = ident ( "=" num)? ( "," ident ( "=" num )? )* ","?
+//enum-list = enum-elem  ( "," enum-elem)* ","?
+// enum-elem = ident ( "=" const-expr )
+// const-exprを使うことによって、enum { ten=1+2+3+4 }みたいなのができる
 Type *enum_specifier()
 {
     //他のやつと同様、生成と取得を同じところで行う
@@ -622,7 +626,7 @@ Type *enum_specifier()
     {
         char *name = expect_ident();
         if (consume("="))
-            cnt = expect_number();
+            cnt = const_expr();
 
         VarScope *sc = push_scope(name); //localとかglobalには入れずにscopeにだけ入れる
         sc->enum_ty = ty;
@@ -756,6 +760,23 @@ Function *function()
     return fn;
 }
 
+bool peek_end()
+{
+    Token *tok = token;
+    bool ret = consume("}") || (consume(",") && consume("}"));
+    token = tok; //チェックするだけなので元に戻す
+    return ret;
+}
+
+void expect_end()
+{
+    Token *tok = token;
+    if (consume(",") && consume("}"))
+        return;
+    token = tok;
+    expect("}"); //初期化は}か,}で終わるのでここでチェック
+}
+
 //global-var = type-specifier declarator type-suffix ";"
 void global_var()
 {
@@ -770,7 +791,73 @@ void global_var()
     push_scope(name)->var = var;
 }
 
-// declaration = type-specifier declarator type-suffix ("=" expr)? ";"
+typedef struct Designator Designator;
+
+struct Designator
+{
+    Designator *next;
+    int index;
+};
+
+Node *create_array_access(Var *var, Designator *desg)
+{
+    Token *tok = var->tok;
+    if (!desg)
+    {
+        return new_var(var, tok);
+    }
+
+    //例えばx[1]で、desg={NULL,1}とすると,
+    //下のcreate_array_accessで。desg->next=NULLとなり、new_varが返る
+    Node *node = create_array_access(var, desg->next);
+    node = new_binary(ND_ADD, node, new_num(desg->index, tok), tok); //index分アドレスに足す,codegenではADDでvarとnumを足すことになる、varはgenでgenAddrに送られるので結局変数のアドレス+indexとなる
+
+    //ここのND_ADDは*(*(x+0)+1)なんだけど、
+    //x+0ではimul*4して、 ~ +1ではimul+12している
+
+    return new_unary(ND_DEREF, node, tok); //DEREFでアドレスの中身へアクセス
+}
+
+Node *assign_array_to_value(Var *var, Designator *desg, Node *rhs)
+{
+    Node *lhs = create_array_access(var, desg);
+    Node *node = new_binary(ND_ASSIGN, lhs, rhs, rhs->tok); //create~で作ったアドレスにASSIGNで値を入れる
+    return new_unary(ND_EXPR_STMT, node, rhs->tok);         //値を入れることだけ目的で、その値を他の何かで使わないのでEXPR_STMR(condとかだったらcmpで使うのでExprにしなきゃいけないけど)
+}
+
+// lvar-initilaize = assign ただのassignの場合もある
+//                   | "{" lvar-initializer ( "," lvar-initializer)* ","? "}"
+
+Node *lvar_initializer(Node *cur, Var *var, Type *ty, Designator *desg)
+{
+    Token *tok = consume("{");
+    if (!tok)
+    {
+        cur->next = assign_array_to_value(var, desg, assign()); //ここで*(*(x+0)+1) = 1みたいなのをを作る
+        return cur->next;
+    }
+
+    if (ty->kind == TY_ARRAY)
+    {
+        int i = 0;
+
+        do
+        {
+            Designator desg2 = {desg, i++}; //desgはarrayAccess用に使う
+            cur = lvar_initializer(cur, var, ty->base, &desg2);
+        } while (!peek_end() && consume(","));
+
+        expect_end();
+
+        return cur;
+    }
+
+    //このcurのnextには *(*(x+0)+1) = 1みたいな初期化が配列の分だけ入る(0初期化も含めて)
+
+    error_tok(tok, "invalid array initializer");
+}
+
+// declaration = type-specifier declarator type-suffix ("=" lvar-initializer)? ";"
 //             | type-specifier ";"
 Node *declaration()
 {
@@ -824,11 +911,26 @@ Node *declaration()
     }
 
     expect("=");
-    Node *lhs = new_var(var, tok);
-    Node *rhs = expr();
+    //ここからlvar-initializer
+    Node head;
+    head.next = NULL;
+    lvar_initializer(&head, var, var->ty, NULL); //ここのvarは int x = {}のxのこと
     expect(";");
-    Node *node = new_binary(ND_ASSIGN, lhs, rhs, tok);
-    return new_unary(ND_EXPR_STMT, node, tok);
+
+    Node *node = new_node(ND_BLOCK, tok);
+    node->body = head.next;
+    return node; //初期化する際は変数を使って新たにND_BLOCKを作成する、でBLOCKの中身を実際の初期化にする,なので、変数の宣言と、初期化を分離している
+    //例として int x = { 1 };とすると(まぁこれならint x = 1でいいんだけど例として)
+    // int x;
+    // { x = 1;}としていることになる
+    //結局新しく作るND_BLOCKのbodyは
+    //{
+    //  *(*(x+0)+0) = 1;
+    //  *(*(x+0)+1) = 2;
+    //  *(*(x+1)+0) = 3;みたいになっている
+    //    *(*(x+0)+1)と*(*(x+1)+0)は,二重配列なので、x+0に入っているアドレスに+1足したそれの中身とx+1に入っているアドレス+0の中身ということ
+    //
+    //}
 }
 
 Node *read_expr_stmt()
@@ -845,7 +947,7 @@ bool is_typename()
 // stmt = "return" expr ";"
 //        | "if" "(" expr ")" stmt ("else" stmt)?
 //        | "switch" "(" expr ")" stmt
-//        | "case" num ":" stmt
+//        | "case" const-expr ":" stmt
 //        | "default" ":" stmt
 //        | "while" "(" expr ")" stmt
 //        | "for" "(" ( expr? ";" | declaration ) expr? ";" expr? ")" stmt
@@ -905,7 +1007,7 @@ Node *stmt()
             error_tok(tok, "stray case");
         }
 
-        int val = expect_number();
+        int val = const_expr();
         expect(":");
 
         Node *node = new_unary(ND_CASE, stmt(), tok);
@@ -1053,6 +1155,62 @@ Node *expr()
     }
 
     return node;
+}
+
+long eval(Node *node)
+{
+    //const_exprからevalで評価できるのは計算系に限る、例えばND_IFとかを渡してもダメ
+    // case if(){} :みたいなのはダメ、ただ三項演算子はOK case x ? 1 : 0 :{}
+    switch (node->kind)
+    {
+    case ND_ADD:
+        return eval(node->lhs) + eval(node->rhs);
+    case ND_SUB:
+        return eval(node->lhs) - eval(node->rhs);
+    case ND_MUL:
+        return eval(node->lhs) * eval(node->rhs);
+    case ND_DIV:
+        return eval(node->lhs) / eval(node->rhs);
+    case ND_BITAND:
+        return eval(node->lhs) & eval(node->rhs);
+    case ND_BITOR:
+        return eval(node->lhs) | eval(node->rhs);
+    case ND_BITXOR:
+        return eval(node->lhs) | eval(node->rhs);
+    case ND_SHL:
+        return eval(node->lhs) << eval(node->rhs);
+    case ND_SHR:
+        return eval(node->lhs) >> eval(node->rhs);
+    case ND_EQ:
+        return eval(node->lhs) == eval(node->rhs);
+    case ND_NE:
+        return eval(node->lhs) != eval(node->rhs);
+    case ND_LT:
+        return eval(node->lhs) < eval(node->rhs);
+    case ND_LE:
+        return eval(node->lhs) <= eval(node->rhs);
+    case ND_TERNARY:
+        return eval(node->cond) ? eval(node->then) : eval(node->els);
+    case ND_COMMA:
+        return eval(node->rhs);
+    case ND_NOT:
+        return !eval(node->lhs);
+    case ND_BITNOT:
+        return ~eval(node->lhs);
+    case ND_LOGAND:
+        return eval(node->lhs) && eval(node->rhs);
+    case ND_LOGOR:
+        return eval(node->lhs) || eval(node->rhs);
+    case ND_NUM:
+        return node->val;
+    }
+
+    error_tok(node->tok, "not a constant expression");
+}
+
+long const_expr()
+{
+    return eval(conditional());
 }
 //例えばa=1;はNode(ASSIGN,left=Lvar,right=NUM)となる
 
@@ -1335,6 +1493,10 @@ Node *postfix()
         if (tok = consume("["))
         {
             //x[y] is short for *(x+y)
+            //x[2][3]があったとして、最初のx[2]を読み取るときND_ADDのtypeは変数のxとなり、
+            //ここで変数のxのtypeは宣言時にtype_suffixでarrayof(arrayof(int,3),2)となっていたので、(x+0)のtypeはarrayof(arrayof(int,3),2)でaddの時にはそのbase array_of(int,3)が使われる
+            //*(x+0)+1の時は,addのtypeは一回目のやつで作ったNDDEREFのtypeになる、ND_DEREFのtypeはnode->lhs->baseなのでarrayof(arrayof(int,3),2)->baseのarrayof(int,3)となる
+            //実際のaddの時はarray_of(int,3)のbase、intが使われる
             Node *exp = new_binary(ND_ADD, node, expr(), tok);
             expect("]");
             node = new_unary(ND_DEREF, exp, tok);
